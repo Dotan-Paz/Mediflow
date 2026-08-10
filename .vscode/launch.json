@@ -8,7 +8,7 @@
             "type": "chrome",
             "request": "launch",
             "name": "Open MediFlow Simulator",
-            "file": "${workspaceFolder}/mediflow_simulator_new.html"
+            "file": "${workspaceFolder}/index.html"
         }
     ]
 }
