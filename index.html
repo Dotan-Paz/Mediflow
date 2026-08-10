@@ -42,6 +42,11 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
 .btn-add{background:var(--adim);border:1px solid var(--acc);color:var(--acc);border-radius:5px;padding:6px;font-size:12px;font-weight:600;cursor:pointer;width:100%;font-family:var(--body)}
 .btn-dl{background:var(--s2);border:1px solid var(--bdr);color:var(--dim);border-radius:5px;padding:6px;font-size:12px;font-weight:600;width:100%;font-family:var(--body);cursor:not-allowed}
 .btn-dl.active{background:var(--adim);border-color:var(--acc);color:var(--acc);cursor:pointer}
+.imp-btn{background:var(--s2);border:1px dashed var(--bdr);color:var(--mut);border-radius:5px;padding:6px;font-size:12px;font-weight:600;width:100%;font-family:var(--body);cursor:pointer;text-align:center;display:block;box-sizing:border-box}
+.imp-btn:hover{border-color:var(--acc);color:var(--acc)}
+.imp-status{font-size:10px;color:var(--dim);margin-top:4px;line-height:1.4}
+.src-tag{font-size:8px;font-weight:600;padding:1px 4px;border-radius:3px;text-transform:uppercase;letter-spacing:.03em;margin-left:4px;vertical-align:middle}
+.src-csv{background:rgba(88,166,255,.15);color:var(--lo)}
 .panel{display:flex;flex-direction:column;border-right:1px solid var(--bdr);overflow:hidden}
 .panel:last-child{border-right:none}
 .panel-head{padding:8px 12px;border-bottom:1px solid var(--bdr);background:var(--sur);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
@@ -140,6 +145,12 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
       <button class="btn-add" id="btnAdd">+ Add to Queue</button>
     </div>
     <div>
+      <div class="sec-title">Import Historical Data</div>
+      <input type="file" id="inCsvFile" accept=".csv" style="display:none"/>
+      <label class="imp-btn" for="inCsvFile" id="btnCsvLabel">📁 Import CSV</label>
+      <div class="imp-status" id="csvStatus">Sets the sim's initial state. Columns: id, urgency[, arrival time].</div>
+    </div>
+    <div>
       <div class="sec-title">Insights</div>
       <button class="btn-dl" id="btnDl">⬇ Download CSV</button>
     </div>
@@ -203,6 +214,7 @@ function newState() {
     toRefs:    {},
     stats:     {total:0,done:0,timeouts:0,waitSum:0,waitN:0},
     servedCount: Object.fromEntries(Object.keys(SR).map(r=>[r,0])),
+    decisionLog: [],
     tickRef:   null,
     arriveRef: null,
   };
@@ -235,6 +247,10 @@ function nextTarget(p){
 }
 
 // ── Dispatch Engine ──
+function logDecision(p,r,waited){
+  S.decisionLog.push({t:Date.now(),pid:p.id,source:p.source,urg:p.urg,resource:r,waited,reason:p.reason});
+  if(S.decisionLog.length>1000) S.decisionLog.shift();
+}
 function dispatch(r){
   const sIdx=S.stations[r].findIndex(s=>!s.busy);
   if(sIdx<0) return;
@@ -251,6 +267,7 @@ function dispatch(r){
   p.reason=UBIN[p.urg]?`Urgent (${p.urg.replace(/_/g,' ')}) — waited ${fmt(waited)}`:`Longest wait (${fmt(waited)})`;
   p.opState='ASSIGNED'; p.curR=r; p.stIdx=sIdx;
   S.stations[r][sIdx].busy=true;
+  logDecision(p,r,waited);
   setLog(`<em style="color:var(--acc)">${p.id}</em> → ${RNAME[r]} [${sIdx+1}]`);
   render();
   const uid=S.uid;
@@ -318,9 +335,9 @@ function autoArrive(){
   const r=nextTarget(p); if(r) dispatch(r);
 }
 
-function makePatient(id,urg,startNow){
+function makePatient(id,urg,startNow,source='realtime'){
   const path=urg==='PERIOD_URGENT'?'PERIOD':urg==='EXCEPTION_URGENT'?'EXCEPTION':'INTAKE';
-  return {id,urg,path,opState:'WAITING',step:0,doneHere:[],curR:null,stIdx:null,waitSince:startNow?Date.now():null,totalWait:0,done:false,reason:''};
+  return {id,urg,path,source,opState:'WAITING',step:0,doneHere:[],curR:null,stIdx:null,waitSince:startNow?Date.now():null,totalWait:0,done:false,reason:''};
 }
 
 // ── Controls ──
@@ -411,6 +428,9 @@ function applyBtns(){
   document.getElementById('btnPause').disabled=!run;
   document.getElementById('btnReset').disabled=false;
   document.querySelectorAll('.res-ctrl button').forEach(b=>b.disabled=run);
+  document.getElementById('inCsvFile').disabled=run;
+  document.getElementById('btnCsvLabel').style.opacity=run?'.4':'1';
+  document.getElementById('btnCsvLabel').style.cursor=run?'not-allowed':'pointer';
 }
 
 // ── Download CSV ──
@@ -423,13 +443,15 @@ function downloadCSV(){
     const sv=S.servedCount[r]||0;
     return `${RNAME[r]},${S.stations[r].length},${sv},${SR[r]/1000}`;
   }).join('\n');
-  const pCsv=S.patients.map(p=>`${p.id},${p.urg.replace(/_/g,' ')},${p.path},${p.done?'Completed':p.opState},"${p.step}/${PATHS[p.path].length}",${Math.round(p.totalWait/1000)}`).join('\n');
+  const pCsv=S.patients.map(p=>`${p.id},${p.source||'realtime'},${p.urg.replace(/_/g,' ')},${p.path},${p.done?'Completed':p.opState},"${p.step}/${PATHS[p.path].length}",${Math.round(p.totalWait/1000)}`).join('\n');
+  const dCsv=S.decisionLog.map(l=>`${new Date(l.t).toISOString().slice(11,19)},${l.pid},${l.source||'realtime'},${l.urg.replace(/_/g,' ')},${RNAME[l.resource]},"${(l.reason||'').replace(/"/g,'""')}"`).join('\n');
   const csv=[
     'MEDIFLOW SIMULATION INSIGHTS',`Generated,${d}`,'',
     'SUMMARY','Metric,Value',`Total Patients,${S.stats.total}`,`Completed,${S.stats.done}`,
     `Completion Rate,${cr}%`,`Timeouts,${S.stats.timeouts}`,`Average Wait Time (sec),${avgW}`,'',
     'RESOURCE PERFORMANCE','Resource,Stations,Patients Served,Service Time (sec)',rCsv,'',
-    'PATIENT LOG','Patient ID,Urgency,Pathway,Status,Steps,Total Wait (sec)',pCsv,
+    'PATIENT LOG','Patient ID,Source,Urgency,Pathway,Status,Steps,Total Wait (sec)',pCsv,'',
+    'DECISION LOG','Time,Patient ID,Source,Urgency,Resource,Reason',dCsv,
   ].join('\n');
   const blob=new Blob([csv],{type:'text/csv'});
   const url=URL.createObjectURL(blob);
@@ -457,7 +479,7 @@ function renderWaiting(){
     const wMs=S.running&&p.waitSince?now-p.waitSince:null;
     const etMs=nxt&&S.running?etaFor(nxt):null;
     return `<div class="card u-${p.urg}">
-      <div class="card-top"><div class="card-id">${p.id}</div><span class="urg-badge ub-${p.urg}">${urgShort(p.urg)}</span></div>
+      <div class="card-top"><div class="card-id">${p.id}${p.source==='csv'?'<span class="src-tag src-csv">CSV</span>':''}</div><span class="urg-badge ub-${p.urg}">${urgShort(p.urg)}</span></div>
       <div class="card-row"><span class="card-lbl">Target</span>${nxt?`<span class="rtag rt-${nxt}">${nxt}</span>`:'<span style="color:var(--dim)">—</span>'}${etMs!==null?`<span class="eta-tag">ETA ${fmt(etMs)}</span>`:''}</div>
       <div class="card-row"><span class="card-lbl">Waited</span><span class="wt ${wMs>18000?'wt-hot':''}">${wMs!==null?fmt(wMs):'<span style="color:var(--dim)">Pending</span>'}</span><span class="card-lbl" style="margin-left:8px">Step</span><span class="card-val">${p.step+1}/${PATHS[p.path].length}</span></div>
     </div>`;
@@ -476,7 +498,7 @@ function renderProcess(){
     let remHtml='';
     if(p.opState==='IN_SERVICE'&&p.curR!==null&&p.stIdx!==null){const st=S.stations[p.curR]?.[p.stIdx];if(st?.endAt) remHtml=`<div class="card-row"><span class="card-lbl">Done in</span><span class="card-val">${fmt(st.endAt-now)}</span></div>`;}
     return `<div class="card u-${p.urg}">
-      <div class="card-top"><div class="card-id">${p.id}</div><span class="op-badge op-${p.opState}">${p.opState.replace(/_/g,' ')}</span></div>
+      <div class="card-top"><div class="card-id">${p.id}${p.source==='csv'?'<span class="src-tag src-csv">CSV</span>':''}</div><span class="op-badge op-${p.opState}">${p.opState.replace(/_/g,' ')}</span></div>
       <div class="card-row"><span class="card-lbl">At</span>${p.curR?`<span class="rtag rt-${p.curR}">${p.curR}</span>`:'<span style="color:var(--dim)">—</span>'}${andLeft.length?`<span style="color:var(--acc);font-size:10px"> + </span>${andLeft.map(r=>`<span class="rtag rt-${r}">${r}</span>`).join('')}`:''}</div>
       ${remHtml}
       <div class="card-row"><span class="card-lbl">Step</span><span class="card-val">${p.step+1}/${PATHS[p.path].length}</span><span class="card-lbl" style="margin-left:8px">Wait total</span><span class="card-val">${fmt(p.totalWait)}</span></div>
@@ -541,6 +563,39 @@ function adjRes(r,d){
   S=newState(); render();
 }
 
+// ── CSV Import ──
+const URG_ALIAS = {
+  EXCEPTION_URGENT:'EXCEPTION_URGENT', EXCEPTION:'EXCEPTION_URGENT', CRITICAL:'EXCEPTION_URGENT', HIGH:'EXCEPTION_URGENT', URGENT:'EXCEPTION_URGENT',
+  PERIOD_URGENT:'PERIOD_URGENT', PERIOD:'PERIOD_URGENT', MEDIUM:'PERIOD_URGENT',
+  INTAKE_NON_URGENT:'INTAKE_NON_URGENT', INTAKE:'INTAKE_NON_URGENT', NON_URGENT:'INTAKE_NON_URGENT', NONURGENT:'INTAKE_NON_URGENT', LOW:'INTAKE_NON_URGENT', NONE:'INTAKE_NON_URGENT',
+};
+function normalizeUrg(raw){
+  if(!raw) return null;
+  const k=raw.trim().toUpperCase().replace(/[\s-]+/g,'_');
+  return URG_ALIAS[k]||null;
+}
+function parseCSVText(text){
+  const lines=text.split(/\r\n|\n|\r/).map(l=>l.trim()).filter(l=>l.length);
+  if(!lines.length) return [];
+  let rows=lines.map(l=>l.split(',').map(c=>c.trim().replace(/^"|"$/g,'')));
+  if(!normalizeUrg(rows[0][1])) rows=rows.slice(1);
+  return rows.filter(r=>r[0]).map(r=>({id:r[0],urgRaw:r[1],arrival:r[2]||null}));
+}
+function importCSVPatients(rows){
+  let added=0,dup=0,bad=0;
+  for(const row of rows){
+    if(S.patients.find(p=>p.id===row.id)){ dup++; continue; }
+    const urg=normalizeUrg(row.urgRaw);
+    if(!urg){ bad++; continue; }
+    const p=makePatient(row.id,urg,false,'csv');
+    if(row.arrival) p.csvArrivalTime=row.arrival;
+    S.patients.push(p);
+    added++;
+  }
+  S.stats.total+=added;
+  return {added,dup,bad};
+}
+
 // ── Event Listeners ──
 document.getElementById('btnStart').addEventListener('click', startSim);
 document.getElementById('btnStop').addEventListener('click',  stopSim);
@@ -565,6 +620,26 @@ document.getElementById('btnAdd').addEventListener('click', () => {
     setLog(`<em style="color:var(--acc)">${id}</em> queued — will dispatch on Start`);
     render();
   }
+});
+
+document.getElementById('inCsvFile').addEventListener('change', (e) => {
+  const file=e.target.files[0];
+  if(!file) return;
+  if(S.running){ document.getElementById('csvStatus').textContent='Stop or reset the sim before importing.'; e.target.value=''; return; }
+  const reader=new FileReader();
+  reader.onload=() => {
+    const rows=parseCSVText(String(reader.result));
+    const {added,dup,bad}=importCSVPatients(rows);
+    const parts=[`Imported ${added} patient${added===1?'':'s'}`];
+    if(dup) parts.push(`${dup} duplicate ID${dup===1?'':'s'} skipped`);
+    if(bad) parts.push(`${bad} row${bad===1?'':'s'} with unrecognized urgency skipped`);
+    document.getElementById('csvStatus').textContent=parts.join(' · ');
+    setLog(`CSV import: ${added} patient(s) added to initial state`);
+    render();
+  };
+  reader.onerror=() => { document.getElementById('csvStatus').textContent='Failed to read file.'; };
+  reader.readAsText(file);
+  e.target.value='';
 });
 
 // ── Init ──
