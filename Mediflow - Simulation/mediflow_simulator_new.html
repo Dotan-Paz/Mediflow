@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>MediFlow — IVF Clinic Simulator</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@300;400;500;600&display=swap');
+:root{--bg:#0d1117;--sur:#161b22;--s2:#1c2330;--bdr:#30363d;--acc:#00d9a6;--adim:rgba(0,217,166,.12);--hi:#ff4d6d;--mid:#f5a623;--lo:#58a6ff;--txt:#e6edf3;--mut:#7d8590;--dim:#484f58;--cSEC:#a78bfa;--cDOC:#60a5fa;--cUS:#34d399;--cNUR:#fbbf24;--cLAB:#f87171;--cPSY:#e879f9;--mono:'IBM Plex Mono',monospace;--body:'Inter',sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:var(--body);font-size:13px;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+header{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;border-bottom:1px solid var(--bdr);background:var(--sur);flex-shrink:0}
+.logo{font-family:var(--mono);font-size:14px;font-weight:600;color:var(--acc)}
+.logo span{color:var(--mut);font-weight:400}
+.hclock{font-family:var(--mono);font-size:12px;color:var(--mut)}
+.hclock strong{color:var(--txt)}
+.hbtns{display:flex;gap:6px}
+.hbtn{border:none;border-radius:6px;padding:5px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--body)}
+.hbtn:disabled{opacity:.35;cursor:not-allowed}
+.hbtn-reset{background:var(--s2);color:var(--mut);border:1px solid var(--bdr)}
+.hbtn-start{background:var(--acc);color:#0d1117}
+.hbtn-pause{background:rgba(245,166,35,.2);color:var(--mid);border:1px solid var(--mid)}
+.hbtn-stop{background:var(--hi);color:#fff}
+.prog{height:2px;background:var(--bdr);flex-shrink:0}
+.prog-fill{height:100%;background:var(--acc);width:0%;transition:width .3s linear}
+.layout{display:grid;grid-template-columns:210px 1fr 1fr 1fr;flex:1;overflow:hidden}
+.sidebar{background:var(--sur);border-right:1px solid var(--bdr);padding:10px;display:flex;flex-direction:column;gap:12px;overflow-y:auto}
+.sec-title{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);padding-bottom:4px;border-bottom:1px solid var(--bdr);margin-bottom:3px}
+.res-row{display:flex;align-items:center;padding:3px 5px;border-radius:4px;background:var(--s2);margin-bottom:3px}
+.res-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.res-name{flex:1;margin-left:6px;font-size:11px;color:var(--mut)}
+.res-ctrl{display:flex;align-items:center;gap:4px}
+.res-ctrl button{width:17px;height:17px;border:1px solid var(--bdr);background:var(--sur);color:var(--txt);border-radius:3px;font-size:13px;cursor:pointer;line-height:1;font-family:var(--mono)}
+.res-val{font-family:var(--mono);font-size:12px;color:var(--txt);width:14px;text-align:center}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+.stat-box{background:var(--s2);border-radius:5px;padding:5px 7px}
+.stat-val{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--acc)}
+.stat-lbl{font-size:10px;color:var(--dim)}
+.form-row{display:flex;flex-direction:column;gap:2px;margin-bottom:5px}
+.form-row label{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
+.form-row input,.form-row select{background:var(--s2);border:1px solid var(--bdr);border-radius:4px;color:var(--txt);padding:4px 7px;font-size:12px;font-family:var(--body);width:100%}
+.btn-add{background:var(--adim);border:1px solid var(--acc);color:var(--acc);border-radius:5px;padding:6px;font-size:12px;font-weight:600;cursor:pointer;width:100%;font-family:var(--body)}
+.btn-dl{background:var(--s2);border:1px solid var(--bdr);color:var(--dim);border-radius:5px;padding:6px;font-size:12px;font-weight:600;width:100%;font-family:var(--body);cursor:not-allowed}
+.btn-dl.active{background:var(--adim);border-color:var(--acc);color:var(--acc);cursor:pointer}
+.panel{display:flex;flex-direction:column;border-right:1px solid var(--bdr);overflow:hidden}
+.panel:last-child{border-right:none}
+.panel-head{padding:8px 12px;border-bottom:1px solid var(--bdr);background:var(--sur);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.panel-title{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--mut)}
+.panel-count{font-family:var(--mono);font-size:10px;color:var(--acc);background:var(--adim);padding:2px 6px;border-radius:8px}
+.panel-body{flex:1;overflow-y:auto;padding:7px;display:flex;flex-direction:column;gap:4px}
+.panel-body::-webkit-scrollbar{width:3px}
+.panel-body::-webkit-scrollbar-thumb{background:var(--bdr);border-radius:2px}
+.card{background:var(--s2);border:1px solid var(--bdr);border-radius:6px;padding:7px 9px;position:relative;overflow:hidden;display:flex;flex-direction:column;gap:4px}
+.card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:6px 0 0 6px}
+.u-EXCEPTION_URGENT::before{background:var(--hi)}
+.u-PERIOD_URGENT::before{background:var(--mid)}
+.u-INTAKE_NON_URGENT::before{background:var(--lo)}
+.card-top{display:flex;align-items:center;justify-content:space-between}
+.card-id{font-family:var(--mono);font-size:12px;font-weight:600}
+.urg-badge{font-size:9px;font-weight:600;padding:1px 5px;border-radius:8px;text-transform:uppercase;letter-spacing:.04em}
+.ub-EXCEPTION_URGENT{background:rgba(255,77,109,.2);color:var(--hi)}
+.ub-PERIOD_URGENT{background:rgba(245,166,35,.2);color:var(--mid)}
+.ub-INTAKE_NON_URGENT{background:rgba(88,166,255,.15);color:var(--lo)}
+.card-row{display:flex;align-items:center;gap:4px;font-size:11px;flex-wrap:wrap}
+.card-lbl{color:var(--dim);font-size:10px;min-width:44px}
+.card-val{color:var(--txt);font-family:var(--mono);font-size:10px}
+.rtag{font-size:10px;padding:1px 5px;border-radius:3px;font-family:var(--mono);font-weight:600}
+.rt-SEC{background:rgba(167,139,250,.15);color:var(--cSEC)}
+.rt-DOC{background:rgba(96,165,250,.15);color:var(--cDOC)}
+.rt-US{background:rgba(52,211,153,.15);color:var(--cUS)}
+.rt-NUR{background:rgba(251,191,36,.15);color:var(--cNUR)}
+.rt-LAB{background:rgba(248,113,113,.15);color:var(--cLAB)}
+.rt-PSY{background:rgba(232,121,249,.15);color:var(--cPSY)}
+.wt{font-family:var(--mono);font-size:10px;color:var(--mut)}
+.wt-hot{color:var(--hi)}
+.op-badge{font-size:9px;padding:1px 5px;border-radius:3px;font-weight:500}
+.op-WAITING{background:rgba(88,166,255,.12);color:var(--lo)}
+.op-ASSIGNED{background:rgba(245,166,35,.12);color:var(--mid)}
+.op-IN_SERVICE{background:rgba(0,217,166,.12);color:var(--acc)}
+.reason{font-size:10px;color:var(--mut);font-style:italic;padding:2px 4px;background:rgba(255,255,255,.03);border-radius:3px;border-left:2px solid var(--bdr)}
+.eta-tag{font-family:var(--mono);font-size:9px;color:var(--dim);padding:1px 4px;background:rgba(255,255,255,.04);border-radius:3px}
+.eff-row{background:var(--s2);border:1px solid var(--bdr);border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;gap:5px}
+.eff-head{display:flex;align-items:center;justify-content:space-between}
+.eff-name{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:500}
+.eff-pct{font-family:var(--mono);font-size:12px;font-weight:600}
+.eff-bar{height:4px;background:var(--bdr);border-radius:2px;overflow:hidden}
+.eff-fill{height:100%;border-radius:2px;transition:width .4s}
+.eff-detail{display:flex;gap:10px}
+.eff-stat{display:flex;flex-direction:column;gap:1px}
+.eff-sv{font-family:var(--mono);font-size:11px;color:var(--txt)}
+.eff-sl{font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
+.eff-dots{display:flex;gap:3px;flex-wrap:wrap;margin-top:1px}
+.eff-dot{width:9px;height:9px;border-radius:50%;border:1px solid rgba(255,255,255,.08)}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:6px;color:var(--dim)}
+.empty-icon{font-size:24px;opacity:.3}
+.empty-text{font-size:11px;text-align:center}
+.logbar{border-top:1px solid var(--bdr);background:var(--sur);padding:3px 14px;font-family:var(--mono);font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">MediFlow <span>/ IVF Clinic Simulator</span></div>
+  <div class="hclock" id="clock">Clinic: <strong>08:00</strong> &nbsp;|&nbsp; Real: <strong>0:00</strong></div>
+  <div class="hbtns">
+    <button class="hbtn hbtn-reset" id="btnReset">Reset</button>
+    <button class="hbtn hbtn-start" id="btnStart">▶ Start</button>
+    <button class="hbtn hbtn-pause" id="btnPause" disabled>⏸ Pause</button>
+    <button class="hbtn hbtn-stop"  id="btnStop"  disabled>■ Stop</button>
+  </div>
+</header>
+<div class="prog"><div class="prog-fill" id="progFill"></div></div>
+
+<div class="layout">
+  <div class="sidebar">
+    <div>
+      <div class="sec-title">Resources</div>
+      <div id="resCtrls"></div>
+    </div>
+    <div>
+      <div class="sec-title">Live Stats</div>
+      <div class="stat-grid">
+        <div class="stat-box"><div class="stat-val" id="sTot">0</div><div class="stat-lbl">Patients</div></div>
+        <div class="stat-box"><div class="stat-val" id="sDone">0</div><div class="stat-lbl">Completed</div></div>
+        <div class="stat-box"><div class="stat-val" id="sTO">0</div><div class="stat-lbl">Timeouts</div></div>
+        <div class="stat-box"><div class="stat-val" id="sWait">—</div><div class="stat-lbl">Avg wait</div></div>
+      </div>
+    </div>
+    <div>
+      <div class="sec-title">Add Patient</div>
+      <div class="form-row"><label>Patient ID</label><input id="inId" placeholder="e.g. P-099"/></div>
+      <div class="form-row">
+        <label>Urgency</label>
+        <select id="inUrg">
+          <option value="INTAKE_NON_URGENT">Non-Urgent (Intake)</option>
+          <option value="PERIOD_URGENT">Period Urgent</option>
+          <option value="EXCEPTION_URGENT">Exception Urgent</option>
+        </select>
+      </div>
+      <button class="btn-add" id="btnAdd">+ Add to Queue</button>
+    </div>
+    <div>
+      <div class="sec-title">Insights</div>
+      <button class="btn-dl" id="btnDl">⬇ Download CSV</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">Waiting Line</div><div class="panel-count" id="cWait">0</div></div>
+    <div class="panel-body" id="panelWait"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">In Process</div><div class="panel-count" id="cProc">0</div></div>
+    <div class="panel-body" id="panelProc"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">Resource Efficiency</div><div class="panel-count" id="cEff">—</div></div>
+    <div class="panel-body" id="panelEff"></div>
+  </div>
+</div>
+
+<div class="logbar" id="logbar">Ready — configure resources and press ▶ Start.</div>
+
+<script>
+'use strict';
+
+const REAL_MS   = 120000;
+const ARRIVE_MS = 7000;
+const TO_MS     = 1000;
+
+const SR    = { SEC:12000, DOC:5000, US:2000, NUR:4000, LAB:8000, PSY:8000 };
+const RNAME = { SEC:'Reception', DOC:'Doctor', US:'Ultrasound', NUR:'Nurse', LAB:'Lab', PSY:'Psychologist' };
+const RCOL  = { SEC:'#a78bfa', DOC:'#60a5fa', US:'#34d399', NUR:'#fbbf24', LAB:'#f87171', PSY:'#e879f9' };
+const UBIN  = { EXCEPTION_URGENT:1, PERIOD_URGENT:1, INTAKE_NON_URGENT:0 };
+const UMIX  = ['INTAKE_NON_URGENT','INTAKE_NON_URGENT','INTAKE_NON_URGENT','INTAKE_NON_URGENT','PERIOD_URGENT','PERIOD_URGENT','EXCEPTION_URGENT'];
+
+const PATHS = {
+  INTAKE:    [{t:'seq',r:['SEC']},{t:'and',r:['DOC','US']},{t:'and',r:['NUR','PSY']},{t:'seq',r:['DOC']}],
+  PERIOD:    [{t:'and',r:['LAB','US']},{t:'seq',r:['DOC']},{t:'seq',r:['NUR']}],
+  EXCEPTION: [{t:'seq',r:['DOC']},{t:'seq',r:['NUR']},{t:'seq',r:['LAB']},{t:'seq',r:['DOC']}],
+};
+
+const CFG = { SEC:2, DOC:3, US:1, NUR:4, LAB:1, PSY:1 };
+
+let S = null;
+
+function newState() {
+  const stations = {};
+  for (const r of Object.keys(SR))
+    stations[r] = Array.from({length:CFG[r]}, () => ({busy:false,patient:null,endAt:null,svcRef:null,remainMs:null}));
+  return {
+    uid:       Date.now(),
+    running:   false,
+    paused:    false,
+    startAt:   null,
+    pausedAt:  null,
+    pauseMs:   0,
+    stations,
+    patients:  [],
+    nextPid:   1,
+    toRefs:    {},
+    stats:     {total:0,done:0,timeouts:0,waitSum:0,waitN:0},
+    servedCount: Object.fromEntries(Object.keys(SR).map(r=>[r,0])),
+    tickRef:   null,
+    arriveRef: null,
+  };
+}
+
+function pad(n){ return String(n).padStart(2,'0'); }
+function fmt(ms){
+  if(ms==null||ms<0) return '—';
+  const s=Math.floor(ms/1000);
+  if(s<60) return s+'s';
+  return Math.floor(s/60)+'m '+pad(s%60)+'s';
+}
+function setLog(h){ document.getElementById('logbar').innerHTML='› '+h; }
+
+// ── Workflow Engine ──
+function etaFor(r){
+  const sts=S.stations[r];
+  if(sts.some(s=>!s.busy)) return 0;
+  return Math.max(0,Math.min(...sts.map(s=>s.endAt||Infinity))-Date.now());
+}
+function nextTarget(p){
+  if(p.done) return null;
+  const stages=PATHS[p.path];
+  if(p.step>=stages.length) return null;
+  const stage=stages[p.step];
+  const rem=stage.r.filter(r=>!p.doneHere.includes(r));
+  if(!rem.length) return null;
+  if(stage.t==='seq') return rem[0];
+  return [...rem].sort((a,b)=>etaFor(a)-etaFor(b))[0];
+}
+
+// ── Dispatch Engine ──
+function dispatch(r){
+  const sIdx=S.stations[r].findIndex(s=>!s.busy);
+  if(sIdx<0) return;
+  const now=Date.now();
+  const Q=S.patients.filter(p=>!p.done&&p.opState==='WAITING'&&nextTarget(p)===r);
+  if(!Q.length) return;
+  Q.sort((a,b)=>{
+    const ud=UBIN[b.urg]-UBIN[a.urg];
+    if(ud) return ud;
+    return (now-(b.waitSince||0))-(now-(a.waitSince||0));
+  });
+  const p=Q[0];
+  const waited=p.waitSince?now-p.waitSince:0;
+  p.reason=UBIN[p.urg]?`Urgent (${p.urg.replace(/_/g,' ')}) — waited ${fmt(waited)}`:`Longest wait (${fmt(waited)})`;
+  p.opState='ASSIGNED'; p.curR=r; p.stIdx=sIdx;
+  S.stations[r][sIdx].busy=true;
+  setLog(`<em style="color:var(--acc)">${p.id}</em> → ${RNAME[r]} [${sIdx+1}]`);
+  render();
+  const uid=S.uid;
+  const toRef=setTimeout(()=>{
+    if(!S||S.uid!==uid||p.opState!=='ASSIGNED') return;
+    S.stats.timeouts++;
+    const st=S.stations[r][sIdx];
+    st.busy=false; st.patient=null; st.endAt=null; st.svcRef=null;
+    p.opState='WAITING'; p.curR=null; p.stIdx=null; p.waitSince=Date.now();
+    delete S.toRefs[p.id];
+    setLog(`<span style="color:var(--mid)">⚠ Timeout: ${p.id} missed ${RNAME[r]}</span>`);
+    render(); dispatch(r);
+  },TO_MS);
+  S.toRefs[p.id]=toRef;
+  setTimeout(()=>{
+    if(!S||S.uid!==uid||p.opState!=='ASSIGNED') return;
+    clearTimeout(S.toRefs[p.id]); delete S.toRefs[p.id];
+    beginService(p,r,sIdx,uid);
+  },280);
+}
+
+function beginService(p,r,sIdx,uid){
+  const now=Date.now();
+  const waited=p.waitSince?now-p.waitSince:0;
+  p.totalWait+=waited; S.stats.waitSum+=waited; S.stats.waitN++;
+  p.opState='IN_SERVICE'; p.waitSince=null;
+  const st=S.stations[r][sIdx];
+  st.patient=p; st.endAt=now+SR[r];
+  setLog(`<em style="color:var(--acc)">${p.id}</em> started ${RNAME[r]} (${SR[r]/1000}s)`);
+  render();
+  const ref=setTimeout(()=>{
+    if(!S||S.uid!==uid||p.opState!=='IN_SERVICE') return;
+    endService(p,r,sIdx,uid);
+  },SR[r]);
+  st.svcRef=ref;
+}
+
+function endService(p,r,sIdx,uid){
+  const st=S.stations[r][sIdx];
+  st.busy=false; st.patient=null; st.endAt=null; st.svcRef=null;
+  if(!p.doneHere.includes(r)){ p.doneHere.push(r); S.servedCount[r]=(S.servedCount[r]||0)+1; }
+  const stage=PATHS[p.path][p.step];
+  if(stage.r.every(res=>p.doneHere.includes(res))){ p.step++; p.doneHere=[]; }
+  if(p.step>=PATHS[p.path].length){
+    p.done=true; p.opState='DONE'; p.curR=null; p.stIdx=null;
+    S.stats.done++;
+    setLog(`<em style="color:var(--acc)">${p.id}</em> ✓ completed`);
+    render(); dispatch(r); return;
+  }
+  p.opState='WAITING'; p.curR=null; p.stIdx=null; p.waitSince=Date.now();
+  const nxt=nextTarget(p);
+  setLog(`<em style="color:var(--acc)">${p.id}</em> finished ${RNAME[r]} → ${nxt?RNAME[nxt]:'?'}`);
+  render(); dispatch(r); if(nxt) dispatch(nxt);
+}
+
+// ── Arrival ──
+function autoArrive(){
+  if(!S||!S.running||S.paused) return;
+  const urg=UMIX[Math.floor(Math.random()*UMIX.length)];
+  const id='P-'+String(S.nextPid++).padStart(3,'0');
+  const p=makePatient(id,urg,true);
+  S.patients.push(p); S.stats.total++;
+  setLog(`<em style="color:var(--acc)">${id}</em> arrived [${urg.replace(/_/g,' ')}]`);
+  render();
+  const r=nextTarget(p); if(r) dispatch(r);
+}
+
+function makePatient(id,urg,startNow){
+  const path=urg==='PERIOD_URGENT'?'PERIOD':urg==='EXCEPTION_URGENT'?'EXCEPTION':'INTAKE';
+  return {id,urg,path,opState:'WAITING',step:0,doneHere:[],curR:null,stIdx:null,waitSince:startNow?Date.now():null,totalWait:0,done:false,reason:''};
+}
+
+// ── Controls ──
+function startSim(){
+  const pre=S?S.patients.slice():[];
+  const pid=S?S.nextPid:1;
+  S=newState(); S.running=true; S.startAt=Date.now(); S.nextPid=pid;
+  for(const p of pre){ p.waitSince=Date.now(); S.patients.push(p); S.stats.total++; }
+  applyBtns();
+  S.tickRef=setInterval(()=>{
+    if(!S.running||S.paused) return;
+    const el=Date.now()-S.startAt-S.pauseMs;
+    const pct=Math.min(el/REAL_MS,1);
+    const cm=Math.floor(pct*480), rs=Math.floor(el/1000);
+    document.getElementById('clock').innerHTML=`Clinic: <strong>${pad(8+Math.floor(cm/60))}:${pad(cm%60)}</strong> &nbsp;|&nbsp; Real: <strong>${Math.floor(rs/60)}:${pad(rs%60)}</strong>`;
+    document.getElementById('progFill').style.width=(pct*100)+'%';
+    updateStats();
+    if(pct>=1) finishSim();
+  },250);
+  S.arriveRef=setInterval(autoArrive,ARRIVE_MS);
+  for(const p of S.patients){ const r=nextTarget(p); if(r) dispatch(r); }
+  autoArrive();
+  setLog('Simulation started — 8-hour clinic day in 2 minutes');
+  render();
+}
+
+function stopSim(){
+  if(!S) return;
+  S.running=false; S.paused=false;
+  clearInterval(S.tickRef); clearInterval(S.arriveRef);
+  for(const r of Object.keys(SR)) for(const st of S.stations[r]) if(st.svcRef){clearTimeout(st.svcRef);st.svcRef=null;}
+  for(const ref of Object.values(S.toRefs)) clearTimeout(ref);
+  S=newState();
+  applyBtns(); resetDisplay(); render();
+  setLog('Stopped. Configure resources and press ▶ Start.');
+}
+
+function finishSim(){
+  S.running=false; S.paused=false;
+  clearInterval(S.tickRef); clearInterval(S.arriveRef);
+  applyBtns();
+  document.getElementById('btnDl').classList.add('active');
+  setLog(`Clinic day complete — ${S.stats.done}/${S.stats.total} completed. Download insights below.`);
+  render();
+}
+
+function resetDisplay(){
+  document.getElementById('progFill').style.width='0%';
+  document.getElementById('clock').innerHTML='Clinic: <strong>08:00</strong> &nbsp;|&nbsp; Real: <strong>0:00</strong>';
+  document.getElementById('btnPause').textContent='⏸ Pause';
+  document.getElementById('btnPause').style.cssText='';
+  document.getElementById('btnDl').classList.remove('active');
+}
+
+function togglePause(){
+  if(!S||!S.running) return;
+  if(!S.paused){
+    S.paused=true; S.pausedAt=Date.now();
+    clearInterval(S.arriveRef); S.arriveRef=null;
+    for(const r of Object.keys(SR)) for(const st of S.stations[r]) if(st.busy&&st.svcRef){clearTimeout(st.svcRef);st.svcRef=null;st.remainMs=Math.max(0,st.endAt-Date.now());}
+    const b=document.getElementById('btnPause');
+    b.textContent='▶ Continue'; b.style.background='rgba(0,217,166,.2)'; b.style.borderColor='var(--acc)'; b.style.color='var(--acc)';
+    setLog('⏸ Paused — everything frozen');
+  } else {
+    S.pauseMs+=Date.now()-S.pausedAt; S.pausedAt=null; S.paused=false;
+    const uid=S.uid;
+    for(const r of Object.keys(SR)) for(let i=0;i<S.stations[r].length;i++){
+      const st=S.stations[r][i];
+      if(st.busy&&st.patient&&st.remainMs!=null){
+        st.endAt=Date.now()+st.remainMs;
+        const p=st.patient,rem=st.remainMs,ri=i,rr=r;
+        st.remainMs=null;
+        st.svcRef=setTimeout(()=>{if(!S||S.uid!==uid||p.opState!=='IN_SERVICE') return; endService(p,rr,ri,uid);},rem);
+      }
+    }
+    S.arriveRef=setInterval(autoArrive,ARRIVE_MS);
+    const b=document.getElementById('btnPause');
+    b.textContent='⏸ Pause'; b.style.background='rgba(245,166,35,.2)'; b.style.borderColor='var(--mid)'; b.style.color='var(--mid)';
+    setLog('▶ Resumed');
+  }
+  applyBtns();
+}
+
+function applyBtns(){
+  const run=S&&S.running;
+  document.getElementById('btnStart').disabled=run;
+  document.getElementById('btnStop').disabled=!run;
+  document.getElementById('btnPause').disabled=!run;
+  document.getElementById('btnReset').disabled=false;
+  document.querySelectorAll('.res-ctrl button').forEach(b=>b.disabled=run);
+}
+
+// ── Download CSV ──
+function downloadCSV(){
+  if(!S||S.running) return;
+  const d=new Date().toISOString().slice(0,19).replace('T',' ');
+  const avgW=S.stats.waitN?Math.round(S.stats.waitSum/S.stats.waitN/1000):0;
+  const cr=S.stats.total?Math.round(S.stats.done/S.stats.total*100):0;
+  const rCsv=Object.keys(SR).map(r=>{
+    const sv=S.servedCount[r]||0;
+    return `${RNAME[r]},${S.stations[r].length},${sv},${SR[r]/1000}`;
+  }).join('\n');
+  const pCsv=S.patients.map(p=>`${p.id},${p.urg.replace(/_/g,' ')},${p.path},${p.done?'Completed':p.opState},"${p.step}/${PATHS[p.path].length}",${Math.round(p.totalWait/1000)}`).join('\n');
+  const csv=[
+    'MEDIFLOW SIMULATION INSIGHTS',`Generated,${d}`,'',
+    'SUMMARY','Metric,Value',`Total Patients,${S.stats.total}`,`Completed,${S.stats.done}`,
+    `Completion Rate,${cr}%`,`Timeouts,${S.stats.timeouts}`,`Average Wait Time (sec),${avgW}`,'',
+    'RESOURCE PERFORMANCE','Resource,Stations,Patients Served,Service Time (sec)',rCsv,'',
+    'PATIENT LOG','Patient ID,Urgency,Pathway,Status,Steps,Total Wait (sec)',pCsv,
+  ].join('\n');
+  const blob=new Blob([csv],{type:'text/csv'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download=`mediflow_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+// ── Render ──
+function urgShort(u){return u==='EXCEPTION_URGENT'?'EXC':u==='PERIOD_URGENT'?'PER':'INT';}
+
+function render(){
+  renderWaiting(); renderProcess(); renderEff(); updateStats();
+}
+
+function renderWaiting(){
+  const el=document.getElementById('panelWait');
+  const now=Date.now();
+  const list=(S?S.patients:[]).filter(p=>p.opState==='WAITING'&&!p.done)
+    .sort((a,b)=>{const ud=UBIN[b.urg]-UBIN[a.urg];if(ud)return ud;return(now-(b.waitSince||0))-(now-(a.waitSince||0));});
+  document.getElementById('cWait').textContent=list.length;
+  if(!list.length){el.innerHTML='<div class="empty"><div class="empty-icon">⏳</div><div class="empty-text">No patients waiting</div></div>';return;}
+  el.innerHTML=list.map(p=>{
+    const nxt=nextTarget(p);
+    const wMs=S.running&&p.waitSince?now-p.waitSince:null;
+    const etMs=nxt&&S.running?etaFor(nxt):null;
+    return `<div class="card u-${p.urg}">
+      <div class="card-top"><div class="card-id">${p.id}</div><span class="urg-badge ub-${p.urg}">${urgShort(p.urg)}</span></div>
+      <div class="card-row"><span class="card-lbl">Target</span>${nxt?`<span class="rtag rt-${nxt}">${nxt}</span>`:'<span style="color:var(--dim)">—</span>'}${etMs!==null?`<span class="eta-tag">ETA ${fmt(etMs)}</span>`:''}</div>
+      <div class="card-row"><span class="card-lbl">Waited</span><span class="wt ${wMs>18000?'wt-hot':''}">${wMs!==null?fmt(wMs):'<span style="color:var(--dim)">Pending</span>'}</span><span class="card-lbl" style="margin-left:8px">Step</span><span class="card-val">${p.step+1}/${PATHS[p.path].length}</span></div>
+    </div>`;
+  }).join('');
+}
+
+function renderProcess(){
+  const el=document.getElementById('panelProc');
+  const now=Date.now();
+  const list=(S?S.patients:[]).filter(p=>(p.opState==='ASSIGNED'||p.opState==='IN_SERVICE')&&!p.done);
+  document.getElementById('cProc').textContent=list.length;
+  if(!list.length){el.innerHTML='<div class="empty"><div class="empty-icon">🏥</div><div class="empty-text">No active patients</div></div>';return;}
+  el.innerHTML=list.map(p=>{
+    const stage=PATHS[p.path][p.step];
+    const andLeft=stage?stage.r.filter(r=>!p.doneHere.includes(r)&&r!==p.curR):[];
+    let remHtml='';
+    if(p.opState==='IN_SERVICE'&&p.curR!==null&&p.stIdx!==null){const st=S.stations[p.curR]?.[p.stIdx];if(st?.endAt) remHtml=`<div class="card-row"><span class="card-lbl">Done in</span><span class="card-val">${fmt(st.endAt-now)}</span></div>`;}
+    return `<div class="card u-${p.urg}">
+      <div class="card-top"><div class="card-id">${p.id}</div><span class="op-badge op-${p.opState}">${p.opState.replace(/_/g,' ')}</span></div>
+      <div class="card-row"><span class="card-lbl">At</span>${p.curR?`<span class="rtag rt-${p.curR}">${p.curR}</span>`:'<span style="color:var(--dim)">—</span>'}${andLeft.length?`<span style="color:var(--acc);font-size:10px"> + </span>${andLeft.map(r=>`<span class="rtag rt-${r}">${r}</span>`).join('')}`:''}</div>
+      ${remHtml}
+      <div class="card-row"><span class="card-lbl">Step</span><span class="card-val">${p.step+1}/${PATHS[p.path].length}</span><span class="card-lbl" style="margin-left:8px">Wait total</span><span class="card-val">${fmt(p.totalWait)}</span></div>
+      ${p.reason?`<div class="reason">↳ ${p.reason}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+function renderEff(){
+  const el=document.getElementById('panelEff');
+  let tB=0,tS=0;
+  el.innerHTML=Object.keys(SR).map(r=>{
+    const sts=S?S.stations[r]:Array.from({length:CFG[r]},()=>({busy:false}));
+    const bN=sts.filter(s=>s.busy).length,cnt=sts.length;
+    tB+=bN; tS+=cnt;
+    const pct=cnt?Math.round(bN/cnt*100):0,col=RCOL[r];
+    const qL=S?S.patients.filter(p=>!p.done&&p.opState==='WAITING'&&nextTarget(p)===r).length:0;
+    const sv=S?S.patients.filter(p=>p.doneHere.includes(r)||p.curR===r).length:0;
+    const et=S&&S.running?etaFor(r):null;
+    const dots=sts.map(s=>`<div class="eff-dot" style="background:${s.busy?col:'var(--s2)'};${s.busy?`border-color:${col};box-shadow:0 0 4px ${col}`:''}"></div>`).join('');
+    return `<div class="eff-row">
+      <div class="eff-head"><div class="eff-name"><div class="res-dot" style="background:${col}"></div><span>${RNAME[r]}</span><span style="color:var(--dim);font-size:10px">(×${cnt})</span></div><div class="eff-pct" style="color:${col}">${bN}/${cnt} busy</div></div>
+      <div class="eff-bar"><div class="eff-fill" style="width:${pct}%;background:${col}"></div></div>
+      <div class="eff-dots">${dots}</div>
+      <div class="eff-detail">
+        <div class="eff-stat"><div class="eff-sv">${sv}</div><div class="eff-sl">Served</div></div>
+        <div class="eff-stat"><div class="eff-sv">${qL}</div><div class="eff-sl">Queued</div></div>
+        <div class="eff-stat"><div class="eff-sv">${SR[r]/1000}s</div><div class="eff-sl">Svc time</div></div>
+        <div class="eff-stat"><div class="eff-sv">${et!==null?fmt(et):'—'}</div><div class="eff-sl">ETA</div></div>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('cEff').textContent=tS?Math.round(tB/tS*100)+'% util':'—';
+}
+
+function updateStats(){
+  if(!S) return;
+  document.getElementById('sTot').textContent=S.stats.total;
+  document.getElementById('sDone').textContent=S.stats.done;
+  document.getElementById('sTO').textContent=S.stats.timeouts;
+  const avg=S.stats.waitN?Math.round(S.stats.waitSum/S.stats.waitN):0;
+  document.getElementById('sWait').textContent=avg?fmt(avg):'—';
+}
+
+// ── Resource Controls ──
+function buildResCtrls(){
+  document.getElementById('resCtrls').innerHTML=Object.keys(SR).map(r=>`
+    <div class="res-row">
+      <div class="res-dot" style="background:${RCOL[r]}"></div>
+      <div class="res-name">${RNAME[r]}</div>
+      <div class="res-ctrl">
+        <button onclick="adjRes('${r}',-1)">−</button>
+        <div class="res-val" id="rv_${r}">${CFG[r]}</div>
+        <button onclick="adjRes('${r}',1)">+</button>
+      </div>
+    </div>`).join('');
+}
+function adjRes(r,d){
+  if(S&&S.running) return;
+  CFG[r]=Math.max(1,Math.min(8,CFG[r]+d));
+  document.getElementById('rv_'+r).textContent=CFG[r];
+  S=newState(); render();
+}
+
+// ── Event Listeners ──
+document.getElementById('btnStart').addEventListener('click', startSim);
+document.getElementById('btnStop').addEventListener('click',  stopSim);
+document.getElementById('btnReset').addEventListener('click', stopSim);
+document.getElementById('btnPause').addEventListener('click', togglePause);
+document.getElementById('btnDl').addEventListener('click',    downloadCSV);
+
+document.getElementById('btnAdd').addEventListener('click', () => {
+  const rawId=document.getElementById('inId').value.trim();
+  const urg=document.getElementById('inUrg').value;
+  document.getElementById('inId').value='';
+  const id=rawId||'P-'+String(S.nextPid++).padStart(3,'0');
+  if(S.patients.find(p=>p.id===id)){setLog(`⚠ ID "${id}" already exists`);return;}
+  const p=makePatient(id,urg,S.running);
+  S.patients.push(p);
+  if(S.running){
+    S.stats.total++;
+    setLog(`<em style="color:var(--acc)">${id}</em> manually added [${urg.replace(/_/g,' ')}]`);
+    render();
+    const r=nextTarget(p); if(r) dispatch(r);
+  } else {
+    setLog(`<em style="color:var(--acc)">${id}</em> queued — will dispatch on Start`);
+    render();
+  }
+});
+
+// ── Init ──
+buildResCtrls();
+S=newState();
+applyBtns();
+render();
+setInterval(()=>{if(S) render();},400);
+</script>
+</body>
+</html>
