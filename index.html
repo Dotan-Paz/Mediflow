@@ -100,6 +100,34 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
 .empty-icon{font-size:24px;opacity:.3}
 .empty-text{font-size:11px;text-align:center}
 .logbar{border-top:1px solid var(--bdr);background:var(--sur);padding:3px 14px;font-family:var(--mono);font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
+.csv-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:1000}
+.csv-modal-overlay.open{display:flex}
+.csv-modal{background:var(--sur);border:1px solid var(--bdr);border-radius:10px;width:600px;max-width:92vw;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.csv-modal-head{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--bdr);flex-shrink:0}
+.csv-modal-title{font-size:13px;font-weight:600;color:var(--txt)}
+.csv-modal-sub{font-size:10px;color:var(--dim);margin-top:2px;font-family:var(--mono)}
+.csv-modal-close{background:none;border:none;color:var(--mut);font-size:15px;cursor:pointer;width:26px;height:26px;border-radius:5px;line-height:1}
+.csv-modal-close:hover{background:var(--s2);color:var(--txt)}
+.csv-modal-body{flex:1;overflow:hidden;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-height:0}
+.csv-spinner-wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:40px 0;color:var(--mut);font-size:12px;flex:1}
+.csv-spinner{width:30px;height:30px;border:3px solid var(--bdr);border-top-color:var(--acc);border-radius:50%;animation:csvspin .7s linear infinite}
+@keyframes csvspin{to{transform:rotate(360deg)}}
+.csv-summary{font-size:11px;color:var(--mut);flex-shrink:0}
+.csv-summary strong{color:var(--acc)}
+.csv-table-wrap{flex:1;min-height:0;overflow-y:auto;border:1px solid var(--bdr);border-radius:6px}
+.csv-table-wrap::-webkit-scrollbar{width:6px}
+.csv-table-wrap::-webkit-scrollbar-thumb{background:var(--bdr);border-radius:3px}
+.csv-table{width:100%;border-collapse:collapse;font-size:11px}
+.csv-table thead th{background:var(--s2);color:var(--dim);text-align:left;padding:6px 8px;font-size:9px;text-transform:uppercase;letter-spacing:.05em;position:sticky;top:0}
+.csv-table tbody td{padding:5px 8px;border-top:1px solid var(--bdr);font-family:var(--mono)}
+.csv-table tbody tr.cst-dup,.csv-table tbody tr.cst-bad{opacity:.55}
+.cst-badge{font-size:9px;font-weight:600;padding:1px 5px;border-radius:8px;text-transform:uppercase}
+.cst-badge.cst-ok{background:rgba(0,217,166,.15);color:var(--acc)}
+.cst-badge.cst-dup{background:rgba(245,166,35,.15);color:var(--mid)}
+.cst-badge.cst-bad{background:rgba(255,77,109,.15);color:var(--hi)}
+.csv-modal-foot{display:flex;align-items:center;justify-content:flex-start;padding:12px 16px;border-top:1px solid var(--bdr);flex-shrink:0}
+.csv-start-btn{background:var(--acc);color:#0d1117;border:none;border-radius:6px;padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--body)}
+.csv-start-btn:disabled{opacity:.35;cursor:not-allowed}
 </style>
 </head>
 <body>
@@ -173,6 +201,24 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
 </div>
 
 <div class="logbar" id="logbar">Ready — configure resources and press ▶ Start.</div>
+
+<div class="csv-modal-overlay" id="csvModalOverlay">
+  <div class="csv-modal">
+    <div class="csv-modal-head">
+      <div>
+        <div class="csv-modal-title">CSV Preview</div>
+        <div class="csv-modal-sub" id="csvModalFile"></div>
+      </div>
+      <button class="csv-modal-close" id="csvModalClose">✕</button>
+    </div>
+    <div class="csv-modal-body" id="csvModalBody">
+      <div class="csv-spinner-wrap"><div class="csv-spinner"></div><div>Reading file…</div></div>
+    </div>
+    <div class="csv-modal-foot">
+      <button class="csv-start-btn" id="csvModalStart" disabled>▶ Start Simulation</button>
+    </div>
+  </div>
+</div>
 
 <script>
 'use strict';
@@ -581,15 +627,24 @@ function parseCSVText(text){
   if(!normalizeUrg(rows[0][1])) rows=rows.slice(1);
   return rows.filter(r=>r[0]).map(r=>({id:r[0],urgRaw:r[1],arrival:r[2]||null}));
 }
+function classifyRow(row,seen){
+  if(!row.id) return {status:'bad',label:'Missing ID'};
+  if(seen.has(row.id)) return {status:'dup',label:'Duplicate ID'};
+  const urg=normalizeUrg(row.urgRaw);
+  if(!urg) return {status:'bad',label:'Unrecognized urgency'};
+  return {status:'ok',label:'OK',urg};
+}
 function importCSVPatients(rows){
   let added=0,dup=0,bad=0;
+  const seen=new Set(S.patients.map(p=>p.id));
   for(const row of rows){
-    if(S.patients.find(p=>p.id===row.id)){ dup++; continue; }
-    const urg=normalizeUrg(row.urgRaw);
-    if(!urg){ bad++; continue; }
-    const p=makePatient(row.id,urg,false,'csv');
+    const c=classifyRow(row,seen);
+    if(c.status==='dup'){ dup++; continue; }
+    if(c.status==='bad'){ bad++; continue; }
+    const p=makePatient(row.id,c.urg,false,'csv');
     if(row.arrival) p.csvArrivalTime=row.arrival;
     S.patients.push(p);
+    seen.add(row.id);
     added++;
   }
   S.stats.total+=added;
@@ -622,24 +677,73 @@ document.getElementById('btnAdd').addEventListener('click', () => {
   }
 });
 
+let pendingCsvRows=null;
+
+function openCsvModal(fileName){
+  document.getElementById('csvModalFile').textContent=fileName;
+  document.getElementById('csvModalBody').innerHTML='<div class="csv-spinner-wrap"><div class="csv-spinner"></div><div>Reading file…</div></div>';
+  document.getElementById('csvModalStart').disabled=true;
+  document.getElementById('csvModalOverlay').classList.add('open');
+}
+function closeCsvModal(){
+  document.getElementById('csvModalOverlay').classList.remove('open');
+  pendingCsvRows=null;
+}
+function renderCsvError(msg){
+  document.getElementById('csvModalBody').innerHTML=`<div class="csv-spinner-wrap" style="color:var(--hi)">${msg}</div>`;
+}
+function renderCsvPreview(rows){
+  const seen=new Set(S.patients.map(p=>p.id));
+  let okCount=0,dupCount=0,badCount=0;
+  const rowsHtml=rows.map(row=>{
+    const c=classifyRow(row,seen);
+    if(c.status==='ok'){ okCount++; seen.add(row.id); }
+    else if(c.status==='dup') dupCount++;
+    else badCount++;
+    return `<tr class="cst-${c.status}">
+      <td>${row.id||'—'}</td>
+      <td>${c.urg?c.urg.replace(/_/g,' '):(row.urgRaw||'—')}</td>
+      <td>${row.arrival||'—'}</td>
+      <td><span class="cst-badge cst-${c.status}">${c.status==='ok'?'OK':c.label}</span></td>
+    </tr>`;
+  }).join('');
+  document.getElementById('csvModalBody').innerHTML=`
+    <div class="csv-summary"><strong>${okCount}</strong> of ${rows.length} row${rows.length===1?'':'s'} will be imported${dupCount?` · ${dupCount} duplicate`:''}${badCount?` · ${badCount} unrecognized`:''}</div>
+    <div class="csv-table-wrap">
+      <table class="csv-table">
+        <thead><tr><th>ID</th><th>Urgency</th><th>Arrival</th><th>Status</th></tr></thead>
+        <tbody>${rowsHtml||'<tr><td colspan="4" style="padding:14px;color:var(--dim)">No rows found</td></tr>'}</tbody>
+      </table>
+    </div>`;
+  document.getElementById('csvModalStart').disabled=okCount===0;
+}
+
 document.getElementById('inCsvFile').addEventListener('change', (e) => {
   const file=e.target.files[0];
   if(!file) return;
   if(S.running){ document.getElementById('csvStatus').textContent='Stop or reset the sim before importing.'; e.target.value=''; return; }
+  openCsvModal(file.name);
   const reader=new FileReader();
   reader.onload=() => {
     const rows=parseCSVText(String(reader.result));
-    const {added,dup,bad}=importCSVPatients(rows);
-    const parts=[`Imported ${added} patient${added===1?'':'s'}`];
-    if(dup) parts.push(`${dup} duplicate ID${dup===1?'':'s'} skipped`);
-    if(bad) parts.push(`${bad} row${bad===1?'':'s'} with unrecognized urgency skipped`);
-    document.getElementById('csvStatus').textContent=parts.join(' · ');
-    setLog(`CSV import: ${added} patient(s) added to initial state`);
-    render();
+    pendingCsvRows=rows;
+    renderCsvPreview(rows);
   };
-  reader.onerror=() => { document.getElementById('csvStatus').textContent='Failed to read file.'; };
+  reader.onerror=() => { renderCsvError('Failed to read file.'); };
   reader.readAsText(file);
   e.target.value='';
+});
+
+document.getElementById('csvModalClose').addEventListener('click', closeCsvModal);
+document.getElementById('csvModalStart').addEventListener('click', () => {
+  if(!pendingCsvRows || !pendingCsvRows.length || S.running) return;
+  const {added,dup,bad}=importCSVPatients(pendingCsvRows);
+  const parts=[`Imported ${added} patient${added===1?'':'s'}`];
+  if(dup) parts.push(`${dup} duplicate ID${dup===1?'':'s'} skipped`);
+  if(bad) parts.push(`${bad} row${bad===1?'':'s'} with unrecognized urgency skipped`);
+  document.getElementById('csvStatus').textContent=parts.join(' · ');
+  closeCsvModal();
+  startSim();
 });
 
 // ── Init ──
