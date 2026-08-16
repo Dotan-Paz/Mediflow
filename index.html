@@ -253,14 +253,17 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
 <script>
 'use strict';
 
-const REAL_MS   = 120000;
-const ARRIVE_MS = 7000;
-const TO_MS     = 1000;
+const REAL_MS   = 60000;            // one clinic day in real ms — the single speed knob
 const DAY_MIN   = 480;              // 8-hour clinic day, 08:00–16:00
-const MIN_MS    = REAL_MS/DAY_MIN;  // real ms per clinic minute (250ms)
+const MIN_MS    = REAL_MS/DAY_MIN;  // real ms per clinic minute
 const OPEN_MIN  = 8*60;             // clinic opens 08:00
+const TO_MS     = 1000;
+const ARRIVE_MIN= 28;               // auto walk-in every 28 clinic minutes
+const ARRIVE_MS = ARRIVE_MIN*MIN_MS;
 
-const SR    = { SEC:12000, DOC:5000, US:2000, NUR:4000, LAB:8000, PSY:8000 };
+// service times in clinic minutes; real-ms values derived so changing REAL_MS keeps the model identical
+const SR_MIN = { SEC:48, DOC:20, US:8, NUR:16, LAB:32, PSY:32 };
+const SR    = Object.fromEntries(Object.entries(SR_MIN).map(([r,m])=>[r,m*MIN_MS]));
 const RNAME = { SEC:'Reception', DOC:'Doctor', US:'Ultrasound', NUR:'Nurse', LAB:'Lab', PSY:'Psychologist' };
 const RCOL  = { SEC:'#a78bfa', DOC:'#60a5fa', US:'#34d399', NUR:'#fbbf24', LAB:'#f87171', PSY:'#e879f9' };
 const UBIN  = { EXCEPTION_URGENT:1, PERIOD_URGENT:1, INTAKE_NON_URGENT:0 };
@@ -376,7 +379,7 @@ function beginService(p,r,sIdx,uid){
   p.opState='IN_SERVICE'; p.waitSince=null;
   const st=S.stations[r][sIdx];
   st.patient=p; st.endAt=now+SR[r];
-  setLog(`<em style="color:var(--acc)">${p.id}</em> started ${RNAME[r]} (${SR[r]/1000}s)`);
+  setLog(`<em style="color:var(--acc)">${p.id}</em> started ${RNAME[r]} (${SR_MIN[r]} min)`);
   render();
   const ref=setTimeout(()=>{
     if(!S||S.uid!==uid||p.opState!=='IN_SERVICE') return;
@@ -453,7 +456,7 @@ function startSim(){
   if(!S.replayMode) autoArrive();
   setLog(S.replayMode
     ?'Historical replay started — arrivals follow the CSV timeline (auto walk-ins off)'
-    :'Simulation started — 8-hour clinic day in 2 minutes');
+    :`Simulation started — 8-hour clinic day in ${Math.round(REAL_MS/1000)} seconds`);
   render();
 }
 
@@ -610,7 +613,7 @@ function downloadCSV(){
   const cr=S.stats.total?Math.round(S.stats.done/S.stats.total*100):0;
   const rCsv=Object.keys(SR).map(r=>{
     const sv=S.servedCount[r]||0;
-    return `${RNAME[r]},${S.stations[r].length},${sv},${SR[r]/1000}`;
+    return `${RNAME[r]},${S.stations[r].length},${sv},${SR_MIN[r]}`;
   }).join('\n');
   const pCsv=S.patients.map(p=>`${p.id},${p.source||'realtime'},${p.urg.replace(/_/g,' ')},${p.path},${p.done?'Completed':p.opState},"${p.step}/${PATHS[p.path].length}",${Math.round(p.totalWait/1000)}`).join('\n');
   const dCsv=S.decisionLog.map(l=>`${new Date(l.t).toISOString().slice(11,19)},${l.pid},${l.source||'realtime'},${l.urg.replace(/_/g,' ')},${RNAME[l.resource]},"${(l.reason||'').replace(/"/g,'""')}"`).join('\n');
@@ -618,7 +621,7 @@ function downloadCSV(){
     'MEDIFLOW SIMULATION INSIGHTS',`Generated,${d}`,'',
     'SUMMARY','Metric,Value',`Total Patients,${S.stats.total}`,`Completed,${S.stats.done}`,
     `Completion Rate,${cr}%`,`Timeouts,${S.stats.timeouts}`,`Average Wait Time (sec),${avgW}`,'',
-    'RESOURCE PERFORMANCE','Resource,Stations,Patients Served,Service Time (sec)',rCsv,'',
+    'RESOURCE PERFORMANCE','Resource,Stations,Patients Served,Service Time (clinic min)',rCsv,'',
     'PATIENT LOG','Patient ID,Source,Urgency,Pathway,Status,Steps,Total Wait (sec)',pCsv,'',
     'DECISION LOG','Time,Patient ID,Source,Urgency,Resource,Reason',dCsv,
   ];
@@ -663,7 +666,7 @@ function renderWaiting(){
     return `<div class="card u-${p.urg}">
       <div class="card-top"><div class="card-id">${p.id}${p.source==='csv'?'<span class="src-tag src-csv">CSV</span>':''}</div><span class="urg-badge ub-${p.urg}">${urgShort(p.urg)}</span></div>
       <div class="card-row"><span class="card-lbl">Target</span>${nxt?`<span class="rtag rt-${nxt}">${nxt}</span>`:'<span style="color:var(--dim)">—</span>'}${etMs!==null?`<span class="eta-tag">ETA ${fmt(etMs)}</span>`:''}</div>
-      <div class="card-row"><span class="card-lbl">Waited</span><span class="wt ${wMs>18000?'wt-hot':''}">${wMs!==null?fmt(wMs):'<span style="color:var(--dim)">Pending</span>'}</span><span class="card-lbl" style="margin-left:8px">Step</span><span class="card-val">${p.step+1}/${PATHS[p.path].length}</span></div>
+      <div class="card-row"><span class="card-lbl">Waited</span><span class="wt ${wMs>72*MIN_MS?'wt-hot':''}">${wMs!==null?fmt(wMs):'<span style="color:var(--dim)">Pending</span>'}</span><span class="card-lbl" style="margin-left:8px">Step</span><span class="card-val">${p.step+1}/${PATHS[p.path].length}</span></div>
     </div>`;
   }).join('')+pendHtml;
 }
@@ -708,7 +711,7 @@ function renderEff(){
       <div class="eff-detail">
         <div class="eff-stat"><div class="eff-sv">${sv}</div><div class="eff-sl">Served</div></div>
         <div class="eff-stat"><div class="eff-sv">${qL}</div><div class="eff-sl">Queued</div></div>
-        <div class="eff-stat"><div class="eff-sv">${SR[r]/1000}s</div><div class="eff-sl">Svc time</div></div>
+        <div class="eff-stat"><div class="eff-sv">${SR_MIN[r]}m</div><div class="eff-sl">Svc time</div></div>
         <div class="eff-stat"><div class="eff-sv">${et!==null?fmt(et):'—'}</div><div class="eff-sl">ETA</div></div>
       </div>
     </div>`;
