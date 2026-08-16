@@ -133,6 +133,8 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
 .countdown-box{background:var(--sur);border:1px solid var(--bdr);border-radius:12px;padding:28px 40px;display:flex;flex-direction:column;align-items:center;gap:10px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
 .countdown-label{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
 .countdown-num{font-family:var(--mono);font-size:48px;font-weight:600;color:var(--acc)}
+.card-pending{opacity:.5}
+.rep-note{font-size:10px;color:var(--dim);flex-shrink:0}
 </style>
 </head>
 <body>
@@ -181,7 +183,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
       <div class="sec-title">Import Historical Data</div>
       <input type="file" id="inCsvFile" accept=".csv" style="display:none"/>
       <label class="imp-btn" for="inCsvFile" id="btnCsvLabel">📁 Import CSV</label>
-      <div class="imp-status" id="csvStatus">Sets the sim's initial state. Columns: id, urgency[, arrival time].</div>
+      <div class="imp-status" id="csvStatus">Roster CSV (id, urgency[, arrival]) or a historical step-log — the step-log runs as a timed replay with a comparison report.</div>
     </div>
     <div>
       <div class="sec-title">Insights</div>
@@ -232,12 +234,31 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
   </div>
 </div>
 
+<div class="csv-modal-overlay" id="repModalOverlay">
+  <div class="csv-modal">
+    <div class="csv-modal-head">
+      <div>
+        <div class="csv-modal-title">Replay Comparison — Actual vs. Algorithm</div>
+        <div class="csv-modal-sub" id="repModalCfg"></div>
+      </div>
+      <button class="csv-modal-close" id="repModalClose">✕</button>
+    </div>
+    <div class="csv-modal-body" id="repModalBody"></div>
+    <div class="csv-modal-foot">
+      <button class="csv-start-btn" id="repModalDl">⬇ Download CSV</button>
+    </div>
+  </div>
+</div>
+
 <script>
 'use strict';
 
 const REAL_MS   = 120000;
 const ARRIVE_MS = 7000;
 const TO_MS     = 1000;
+const DAY_MIN   = 480;              // 8-hour clinic day, 08:00–16:00
+const MIN_MS    = REAL_MS/DAY_MIN;  // real ms per clinic minute (250ms)
+const OPEN_MIN  = 8*60;             // clinic opens 08:00
 
 const SR    = { SEC:12000, DOC:5000, US:2000, NUR:4000, LAB:8000, PSY:8000 };
 const RNAME = { SEC:'Reception', DOC:'Doctor', US:'Ultrasound', NUR:'Nurse', LAB:'Lab', PSY:'Psychologist' };
@@ -273,6 +294,7 @@ function newState() {
     stats:     {total:0,done:0,timeouts:0,waitSum:0,waitN:0},
     servedCount: Object.fromEntries(Object.keys(SR).map(r=>[r,0])),
     decisionLog: [],
+    replayMode: false,
     tickRef:   null,
     arriveRef: null,
   };
@@ -403,23 +425,46 @@ function startSim(){
   const pre=S?S.patients.slice():[];
   const pid=S?S.nextPid:1;
   S=newState(); S.running=true; S.startAt=Date.now(); S.nextPid=pid;
-  for(const p of pre){ p.waitSince=Date.now(); S.patients.push(p); S.stats.total++; }
+  S.replayMode=pre.some(p=>p.arrivalOffsetMin!=null);
+  for(const p of pre){
+    // fresh runtime state so a finished roster can be re-run under a new config
+    p.step=0; p.doneHere=[]; p.done=false; p.opState='WAITING';
+    p.curR=null; p.stIdx=null; p.totalWait=0; p.reason='';
+    if(p.arrivalOffsetMin!=null&&p.arrivalOffsetMin>0){
+      p.opState='PENDING'; p.waitSince=null; S.patients.push(p);
+    } else {
+      p.waitSince=Date.now(); S.patients.push(p); S.stats.total++;
+    }
+  }
   applyBtns();
   S.tickRef=setInterval(()=>{
     if(!S.running||S.paused) return;
     const el=Date.now()-S.startAt-S.pauseMs;
     const pct=Math.min(el/REAL_MS,1);
-    const cm=Math.floor(pct*480), rs=Math.floor(el/1000);
+    const cm=Math.floor(pct*DAY_MIN), rs=Math.floor(el/1000);
     document.getElementById('clock').innerHTML=`Clinic: <strong>${pad(8+Math.floor(cm/60))}:${pad(cm%60)}</strong> &nbsp;|&nbsp; Real: <strong>${Math.floor(rs/60)}:${pad(rs%60)}</strong>`;
     document.getElementById('progFill').style.width=(pct*100)+'%';
+    if(S.replayMode) releaseReplayArrivals(cm);
     updateStats();
     if(pct>=1) finishSim();
   },250);
-  S.arriveRef=setInterval(autoArrive,ARRIVE_MS);
-  for(const p of S.patients){ const r=nextTarget(p); if(r) dispatch(r); }
-  autoArrive();
-  setLog('Simulation started — 8-hour clinic day in 2 minutes');
+  if(!S.replayMode) S.arriveRef=setInterval(autoArrive,ARRIVE_MS);
+  for(const p of S.patients){ if(p.opState==='WAITING'){ const r=nextTarget(p); if(r) dispatch(r); } }
+  if(!S.replayMode) autoArrive();
+  setLog(S.replayMode
+    ?'Historical replay started — arrivals follow the CSV timeline (auto walk-ins off)'
+    :'Simulation started — 8-hour clinic day in 2 minutes');
   render();
+}
+
+function releaseReplayArrivals(cm){
+  for(const p of S.patients){
+    if(p.opState==='PENDING'&&p.arrivalOffsetMin<=cm){
+      p.opState='WAITING'; p.waitSince=Date.now(); S.stats.total++;
+      setLog(`<em style="color:var(--acc)">${p.id}</em> arrived (historical ${p.csvArrivalTime||'—'})`);
+      const r=nextTarget(p); if(r) dispatch(r);
+    }
+  }
 }
 
 let countdownTimer=null;
@@ -449,6 +494,7 @@ function startWithCountdown(seconds=3){
 
 function stopSim(){
   cancelCountdown();
+  document.getElementById('repModalOverlay').classList.remove('open');
   if(!S) return;
   S.running=false; S.paused=false;
   clearInterval(S.tickRef); clearInterval(S.arriveRef);
@@ -466,6 +512,45 @@ function finishSim(){
   document.getElementById('btnDl').classList.add('active');
   setLog(`Clinic day complete — ${S.stats.done}/${S.stats.total} completed. Download insights below.`);
   render();
+  if(S.replayMode) showReplayReport();
+}
+
+function replayRows(){
+  return S.patients.filter(p=>p.actualWaitMin!=null).map(p=>{
+    const sim=Math.round(p.totalWait/MIN_MS);
+    return {p,sim,delta:sim-p.actualWaitMin};
+  });
+}
+function showReplayReport(){
+  const rows=replayRows();
+  if(!rows.length) return;
+  const cfgStr=Object.keys(SR).map(r=>`${RNAME[r]}×${S.stations[r].length}`).join(' · ');
+  document.getElementById('repModalCfg').textContent=cfgStr;
+  const rowsHtml=rows.map(({p,sim,delta})=>`
+    <tr${p.done?'':' style="opacity:.55"'}>
+      <td>${p.id}</td>
+      <td>${p.urg.replace(/_/g,' ')}</td>
+      <td>${p.csvArrivalTime||'—'}</td>
+      <td>${p.actualWaitMin}</td>
+      <td>${sim}${p.done?'':' *'}</td>
+      <td style="color:${delta<0?'var(--acc)':delta>0?'var(--hi)':'var(--mut)'}">${delta>0?'+':''}${delta}</td>
+    </tr>`).join('');
+  const avgA=rows.reduce((s,x)=>s+x.p.actualWaitMin,0)/rows.length;
+  const avgS=rows.reduce((s,x)=>s+x.sim,0)/rows.length;
+  const dAvg=avgS-avgA;
+  const incomplete=rows.filter(x=>!x.p.done).length;
+  document.getElementById('repModalBody').innerHTML=`
+    <div class="csv-summary">Average wait: actual <strong>${avgA.toFixed(1)} min</strong> vs algorithm <strong>${avgS.toFixed(1)} min</strong>
+      — <span style="color:${dAvg<0?'var(--acc)':'var(--hi)'}">${dAvg<0?'−':'+'}${Math.abs(dAvg).toFixed(1)} min ${dAvg<0?'saved':'added'} per patient</span></div>
+    <div class="csv-table-wrap">
+      <table class="csv-table">
+        <thead><tr><th>ID</th><th>Urgency</th><th>Arrival</th><th>Actual wait (min)</th><th>Algorithm wait (min)</th><th>Δ (min)</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+    ${incomplete?`<div class="rep-note">* ${incomplete} patient${incomplete===1?'':'s'} did not finish the pathway before close of day — their simulated wait is partial.</div>`:''}
+    <div class="rep-note">Times are clinic minutes. Re-run with different resource counts: Reset, adjust resources, re-import the CSV.</div>`;
+  document.getElementById('repModalOverlay').classList.add('open');
 }
 
 function resetDisplay(){
@@ -536,8 +621,16 @@ function downloadCSV(){
     'RESOURCE PERFORMANCE','Resource,Stations,Patients Served,Service Time (sec)',rCsv,'',
     'PATIENT LOG','Patient ID,Source,Urgency,Pathway,Status,Steps,Total Wait (sec)',pCsv,'',
     'DECISION LOG','Time,Patient ID,Source,Urgency,Resource,Reason',dCsv,
-  ].join('\n');
-  const blob=new Blob([csv],{type:'text/csv'});
+  ];
+  const rep=replayRows();
+  if(rep.length){
+    const cfgStr=Object.keys(SR).map(r=>`${RNAME[r]} x${S.stations[r].length}`).join(' | ');
+    csv.push('','REPLAY COMPARISON (clinic minutes)',`Resource Config,"${cfgStr}"`,
+      'Patient ID,Urgency,Arrival,Actual Wait (min),Algorithm Wait (min),Delta (min),Completed',
+      ...rep.map(({p,sim,delta})=>`${p.id},${p.urg.replace(/_/g,' ')},${p.csvArrivalTime||''},${p.actualWaitMin},${sim},${delta},${p.done?'Yes':'No'}`));
+  }
+  const csvText=csv.join('\n');
+  const blob=new Blob([csvText],{type:'text/csv'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
   a.href=url; a.download=`mediflow_${new Date().toISOString().slice(0,10)}.csv`;
@@ -556,8 +649,13 @@ function renderWaiting(){
   const now=Date.now();
   const list=(S?S.patients:[]).filter(p=>p.opState==='WAITING'&&!p.done)
     .sort((a,b)=>{const ud=UBIN[b.urg]-UBIN[a.urg];if(ud)return ud;return(now-(b.waitSince||0))-(now-(a.waitSince||0));});
+  const pend=(S?S.patients:[]).filter(p=>p.opState==='PENDING').sort((a,b)=>a.arrivalOffsetMin-b.arrivalOffsetMin);
   document.getElementById('cWait').textContent=list.length;
-  if(!list.length){el.innerHTML='<div class="empty"><div class="empty-icon">⏳</div><div class="empty-text">No patients waiting</div></div>';return;}
+  if(!list.length&&!pend.length){el.innerHTML='<div class="empty"><div class="empty-icon">⏳</div><div class="empty-text">No patients waiting</div></div>';return;}
+  const pendHtml=pend.map(p=>`<div class="card card-pending u-${p.urg}">
+      <div class="card-top"><div class="card-id">${p.id}<span class="src-tag src-csv">CSV</span></div><span class="urg-badge ub-${p.urg}">${urgShort(p.urg)}</span></div>
+      <div class="card-row"><span class="card-lbl">Arrives</span><span class="card-val">${p.csvArrivalTime||'—'}</span></div>
+    </div>`).join('');
   el.innerHTML=list.map(p=>{
     const nxt=nextTarget(p);
     const wMs=S.running&&p.waitSince?now-p.waitSince:null;
@@ -567,7 +665,7 @@ function renderWaiting(){
       <div class="card-row"><span class="card-lbl">Target</span>${nxt?`<span class="rtag rt-${nxt}">${nxt}</span>`:'<span style="color:var(--dim)">—</span>'}${etMs!==null?`<span class="eta-tag">ETA ${fmt(etMs)}</span>`:''}</div>
       <div class="card-row"><span class="card-lbl">Waited</span><span class="wt ${wMs>18000?'wt-hot':''}">${wMs!==null?fmt(wMs):'<span style="color:var(--dim)">Pending</span>'}</span><span class="card-lbl" style="margin-left:8px">Step</span><span class="card-val">${p.step+1}/${PATHS[p.path].length}</span></div>
     </div>`;
-  }).join('');
+  }).join('')+pendHtml;
 }
 
 function renderProcess(){
@@ -658,12 +756,43 @@ function normalizeUrg(raw){
   const k=raw.trim().toUpperCase().replace(/[\s-]+/g,'_');
   return URG_ALIAS[k]||null;
 }
+function timeToMin(t){
+  const m=/^(\d{1,2}):(\d{2})$/.exec((t||'').trim());
+  return m?(+m[1])*60+(+m[2]):null;
+}
 function parseCSVText(text){
   const lines=text.split(/\r\n|\n|\r/).map(l=>l.trim()).filter(l=>l.length);
-  if(!lines.length) return [];
-  let rows=lines.map(l=>l.split(',').map(c=>c.trim().replace(/^"|"$/g,'')));
+  if(!lines.length) return {format:'roster',rows:[]};
+  const cells=lines.map(l=>l.split(',').map(c=>c.trim().replace(/^"|"$/g,'')));
+  const head=cells[0].map(c=>c.toLowerCase());
+  if(head.includes('enter_time')) return parseEventLog(head,cells.slice(1));
+  let rows=cells;
   if(!normalizeUrg(rows[0][1])) rows=rows.slice(1);
-  return rows.filter(r=>r[0]).map(r=>({id:r[0],urgRaw:r[1],arrival:r[2]||null}));
+  return {format:'roster',rows:rows.filter(r=>r[0]).map(r=>({id:r[0],urgRaw:r[1],arrival:r[2]||null}))};
+}
+// Historical step-log: one row per patient step (patient_id,urgency,...,enter_time,...,aggregated_waiting_time_min).
+// Collapse to one record per patient: arrival = earliest enter_time, actual wait = max aggregated wait.
+function parseEventLog(head,body){
+  const iId=head.indexOf('patient_id'), iUrg=head.indexOf('urgency'),
+        iIn=head.indexOf('enter_time'), iAgg=head.indexOf('aggregated_waiting_time_min');
+  if(iId<0||iUrg<0||iIn<0) return {format:'eventlog',rows:[]};
+  const byId=new Map();
+  for(const r of body){
+    const id=r[iId]; if(!id) continue;
+    let g=byId.get(id);
+    if(!g){ g={id,urgRaw:r[iUrg],arrivalMin:null,actualWaitMin:0}; byId.set(id,g); }
+    const em=timeToMin(r[iIn]);
+    if(em!=null&&(g.arrivalMin==null||em<g.arrivalMin)) g.arrivalMin=em;
+    const w=iAgg>=0?parseFloat(r[iAgg]):NaN;
+    if(!isNaN(w)&&w>g.actualWaitMin) g.actualWaitMin=w;
+  }
+  const rows=[...byId.values()].map(g=>({
+    id:g.id, urgRaw:g.urgRaw,
+    arrival:g.arrivalMin!=null?`${pad(Math.floor(g.arrivalMin/60))}:${pad(g.arrivalMin%60)}`:null,
+    arrivalMin:g.arrivalMin!=null?Math.max(0,g.arrivalMin-OPEN_MIN):null,
+    actualWaitMin:g.actualWaitMin,
+  }));
+  return {format:'eventlog',rows};
 }
 function classifyRow(row,seen){
   if(!row.id) return {status:'bad',label:'Missing ID'};
@@ -681,6 +810,8 @@ function importCSVPatients(rows){
     if(c.status==='bad'){ bad++; continue; }
     const p=makePatient(row.id,c.urg,false,'csv');
     if(row.arrival) p.csvArrivalTime=row.arrival;
+    if(row.arrivalMin!=null) p.arrivalOffsetMin=row.arrivalMin;
+    if(row.actualWaitMin!=null) p.actualWaitMin=row.actualWaitMin;
     S.patients.push(p);
     seen.add(row.id);
     added++;
@@ -730,7 +861,8 @@ function closeCsvModal(){
 function renderCsvError(msg){
   document.getElementById('csvModalBody').innerHTML=`<div class="csv-spinner-wrap" style="color:var(--hi)">${msg}</div>`;
 }
-function renderCsvPreview(rows){
+function renderCsvPreview(parsed){
+  const rows=parsed.rows, isLog=parsed.format==='eventlog';
   const seen=new Set(S.patients.map(p=>p.id));
   let okCount=0,dupCount=0,badCount=0;
   const rowsHtml=rows.map(row=>{
@@ -742,15 +874,16 @@ function renderCsvPreview(rows){
       <td>${row.id||'—'}</td>
       <td>${c.urg?c.urg.replace(/_/g,' '):(row.urgRaw||'—')}</td>
       <td>${row.arrival||'—'}</td>
+      ${isLog?`<td>${row.actualWaitMin!=null?row.actualWaitMin:'—'}</td>`:''}
       <td><span class="cst-badge cst-${c.status}">${c.status==='ok'?'OK':c.label}</span></td>
     </tr>`;
   }).join('');
   document.getElementById('csvModalBody').innerHTML=`
-    <div class="csv-summary"><strong>${okCount}</strong> of ${rows.length} row${rows.length===1?'':'s'} will be imported${dupCount?` · ${dupCount} duplicate`:''}${badCount?` · ${badCount} unrecognized`:''}</div>
+    <div class="csv-summary"><strong>${okCount}</strong> of ${rows.length} patient${rows.length===1?'':'s'} will be imported${dupCount?` · ${dupCount} duplicate`:''}${badCount?` · ${badCount} unrecognized`:''}${isLog?' — <strong>historical replay</strong>: arrivals follow the CSV timeline, auto walk-ins off, comparison report at end of day':''}</div>
     <div class="csv-table-wrap">
       <table class="csv-table">
-        <thead><tr><th>ID</th><th>Urgency</th><th>Arrival</th><th>Status</th></tr></thead>
-        <tbody>${rowsHtml||'<tr><td colspan="4" style="padding:14px;color:var(--dim)">No rows found</td></tr>'}</tbody>
+        <thead><tr><th>ID</th><th>Urgency</th><th>Arrival</th>${isLog?'<th>Actual wait (min)</th>':''}<th>Status</th></tr></thead>
+        <tbody>${rowsHtml||`<tr><td colspan="${isLog?5:4}" style="padding:14px;color:var(--dim)">No rows found</td></tr>`}</tbody>
       </table>
     </div>`;
   document.getElementById('csvModalStart').disabled=okCount===0;
@@ -763,9 +896,9 @@ document.getElementById('inCsvFile').addEventListener('change', (e) => {
   openCsvModal(file.name);
   const reader=new FileReader();
   reader.onload=() => {
-    const rows=parseCSVText(String(reader.result));
-    pendingCsvRows=rows;
-    renderCsvPreview(rows);
+    const parsed=parseCSVText(String(reader.result));
+    pendingCsvRows=parsed.rows;
+    renderCsvPreview(parsed);
   };
   reader.onerror=() => { renderCsvError('Failed to read file.'); };
   reader.readAsText(file);
@@ -773,6 +906,8 @@ document.getElementById('inCsvFile').addEventListener('change', (e) => {
 });
 
 document.getElementById('csvModalClose').addEventListener('click', closeCsvModal);
+document.getElementById('repModalClose').addEventListener('click', () => document.getElementById('repModalOverlay').classList.remove('open'));
+document.getElementById('repModalDl').addEventListener('click', downloadCSV);
 document.getElementById('csvModalStart').addEventListener('click', () => {
   if(!pendingCsvRows || !pendingCsvRows.length || S.running) return;
   const {added,dup,bad}=importCSVPatients(pendingCsvRows);
