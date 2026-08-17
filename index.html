@@ -258,6 +258,7 @@ const DAY_MIN   = 480;              // 8-hour clinic day, 08:00–16:00
 const MIN_MS    = REAL_MS/DAY_MIN;  // real ms per clinic minute
 const OPEN_MIN  = 8*60;             // clinic opens 08:00
 const TO_MS     = 1000;
+const ASSIGN_MS = MIN_MS;           // assignment→service handoff, modeled as 1 clinic minute
 const ARRIVE_MIN= 28;               // auto walk-in every 28 clinic minutes
 const ARRIVE_MS = ARRIVE_MIN*MIN_MS;
 
@@ -311,6 +312,7 @@ function fmt(ms){
   return Math.floor(s/60)+'m '+pad(s%60)+'s';
 }
 function setLog(h){ document.getElementById('logbar').innerHTML='› '+h; }
+function fmtCM(ms){ return ms==null||ms<0?'—':Math.round(ms/MIN_MS)+'m'; }
 
 // ── Workflow Engine ──
 function etaFor(r){
@@ -347,7 +349,7 @@ function dispatch(r){
   });
   const p=Q[0];
   const waited=p.waitSince?now-p.waitSince:0;
-  p.reason=UBIN[p.urg]?`Urgent (${p.urg.replace(/_/g,' ')}) — waited ${fmt(waited)}`:`Longest wait (${fmt(waited)})`;
+  p.reason=UBIN[p.urg]?`Urgent (${p.urg.replace(/_/g,' ')}) — waited ${fmtCM(waited)}`:`Longest wait (${fmtCM(waited)})`;
   p.opState='ASSIGNED'; p.curR=r; p.stIdx=sIdx;
   S.stations[r][sIdx].busy=true;
   logDecision(p,r,waited);
@@ -369,7 +371,7 @@ function dispatch(r){
     if(!S||S.uid!==uid||p.opState!=='ASSIGNED') return;
     clearTimeout(S.toRefs[p.id]); delete S.toRefs[p.id];
     beginService(p,r,sIdx,uid);
-  },280);
+  },ASSIGN_MS);
 }
 
 function beginService(p,r,sIdx,uid){
@@ -574,7 +576,10 @@ function togglePause(){
     b.textContent='▶ Continue'; b.style.background='rgba(0,217,166,.2)'; b.style.borderColor='var(--acc)'; b.style.color='var(--acc)';
     setLog('⏸ Paused — everything frozen');
   } else {
-    S.pauseMs+=Date.now()-S.pausedAt; S.pausedAt=null; S.paused=false;
+    const dP=Date.now()-S.pausedAt;
+    S.pauseMs+=dP; S.pausedAt=null; S.paused=false;
+    // shift wait anchors so time spent paused doesn't count as patient waiting
+    for(const p of S.patients) if(p.waitSince!=null) p.waitSince+=dP;
     const uid=S.uid;
     for(const r of Object.keys(SR)) for(let i=0;i<S.stations[r].length;i++){
       const st=S.stations[r][i];
@@ -665,8 +670,8 @@ function renderWaiting(){
     const etMs=nxt&&S.running?etaFor(nxt):null;
     return `<div class="card u-${p.urg}">
       <div class="card-top"><div class="card-id">${p.id}${p.source==='csv'?'<span class="src-tag src-csv">CSV</span>':''}</div><span class="urg-badge ub-${p.urg}">${urgShort(p.urg)}</span></div>
-      <div class="card-row"><span class="card-lbl">Target</span>${nxt?`<span class="rtag rt-${nxt}">${nxt}</span>`:'<span style="color:var(--dim)">—</span>'}${etMs!==null?`<span class="eta-tag">ETA ${fmt(etMs)}</span>`:''}</div>
-      <div class="card-row"><span class="card-lbl">Waited</span><span class="wt ${wMs>72*MIN_MS?'wt-hot':''}">${wMs!==null?fmt(wMs):'<span style="color:var(--dim)">Pending</span>'}</span><span class="card-lbl" style="margin-left:8px">Step</span><span class="card-val">${p.step+1}/${PATHS[p.path].length}</span></div>
+      <div class="card-row"><span class="card-lbl">Target</span>${nxt?`<span class="rtag rt-${nxt}">${nxt}</span>`:'<span style="color:var(--dim)">—</span>'}${etMs!==null?`<span class="eta-tag">ETA ${fmtCM(etMs)}</span>`:''}</div>
+      <div class="card-row"><span class="card-lbl">Waited</span><span class="wt ${wMs>72*MIN_MS?'wt-hot':''}">${wMs!==null?fmtCM(wMs):'<span style="color:var(--dim)">Pending</span>'}</span><span class="card-lbl" style="margin-left:8px">Step</span><span class="card-val">${p.step+1}/${PATHS[p.path].length}</span></div>
     </div>`;
   }).join('')+pendHtml;
 }
@@ -681,12 +686,12 @@ function renderProcess(){
     const stage=PATHS[p.path][p.step];
     const andLeft=stage?stage.r.filter(r=>!p.doneHere.includes(r)&&r!==p.curR):[];
     let remHtml='';
-    if(p.opState==='IN_SERVICE'&&p.curR!==null&&p.stIdx!==null){const st=S.stations[p.curR]?.[p.stIdx];if(st?.endAt) remHtml=`<div class="card-row"><span class="card-lbl">Done in</span><span class="card-val">${fmt(st.endAt-now)}</span></div>`;}
+    if(p.opState==='IN_SERVICE'&&p.curR!==null&&p.stIdx!==null){const st=S.stations[p.curR]?.[p.stIdx];if(st?.endAt) remHtml=`<div class="card-row"><span class="card-lbl">Done in</span><span class="card-val">${fmtCM(st.endAt-now)}</span></div>`;}
     return `<div class="card u-${p.urg}">
       <div class="card-top"><div class="card-id">${p.id}${p.source==='csv'?'<span class="src-tag src-csv">CSV</span>':''}</div><span class="op-badge op-${p.opState}">${p.opState.replace(/_/g,' ')}</span></div>
       <div class="card-row"><span class="card-lbl">At</span>${p.curR?`<span class="rtag rt-${p.curR}">${p.curR}</span>`:'<span style="color:var(--dim)">—</span>'}${andLeft.length?`<span style="color:var(--acc);font-size:10px"> + </span>${andLeft.map(r=>`<span class="rtag rt-${r}">${r}</span>`).join('')}`:''}</div>
       ${remHtml}
-      <div class="card-row"><span class="card-lbl">Step</span><span class="card-val">${p.step+1}/${PATHS[p.path].length}</span><span class="card-lbl" style="margin-left:8px">Wait total</span><span class="card-val">${fmt(p.totalWait)}</span></div>
+      <div class="card-row"><span class="card-lbl">Step</span><span class="card-val">${p.step+1}/${PATHS[p.path].length}</span><span class="card-lbl" style="margin-left:8px">Wait total</span><span class="card-val">${fmtCM(p.totalWait)}</span></div>
       ${p.reason?`<div class="reason">↳ ${p.reason}</div>`:''}
     </div>`;
   }).join('');
@@ -712,7 +717,7 @@ function renderEff(){
         <div class="eff-stat"><div class="eff-sv">${sv}</div><div class="eff-sl">Served</div></div>
         <div class="eff-stat"><div class="eff-sv">${qL}</div><div class="eff-sl">Queued</div></div>
         <div class="eff-stat"><div class="eff-sv">${SR_MIN[r]}m</div><div class="eff-sl">Svc time</div></div>
-        <div class="eff-stat"><div class="eff-sv">${et!==null?fmt(et):'—'}</div><div class="eff-sl">ETA</div></div>
+        <div class="eff-stat"><div class="eff-sv">${et!==null?fmtCM(et):'—'}</div><div class="eff-sl">ETA</div></div>
       </div>
     </div>`;
   }).join('');
@@ -725,7 +730,7 @@ function updateStats(){
   document.getElementById('sDone').textContent=S.stats.done;
   document.getElementById('sTO').textContent=S.stats.timeouts;
   const avg=S.stats.waitN?Math.round(S.stats.waitSum/S.stats.waitN):0;
-  document.getElementById('sWait').textContent=avg?fmt(avg):'—';
+  document.getElementById('sWait').textContent=avg?fmtCM(avg):'—';
 }
 
 // ── Resource Controls ──
@@ -906,6 +911,15 @@ document.getElementById('inCsvFile').addEventListener('change', (e) => {
   reader.onerror=() => { renderCsvError('Failed to read file.'); };
   reader.readAsText(file);
   e.target.value='';
+});
+
+// browser throttles timers in hidden tabs while wall-clock time keeps running,
+// which corrupts wait measurements — freeze the sim instead and resume on return
+let autoPaused=false;
+document.addEventListener('visibilitychange', () => {
+  if(!S||!S.running) return;
+  if(document.hidden&&!S.paused){ autoPaused=true; togglePause(); }
+  else if(!document.hidden&&autoPaused){ autoPaused=false; if(S.paused) togglePause(); }
 });
 
 document.getElementById('csvModalClose').addEventListener('click', closeCsvModal);
