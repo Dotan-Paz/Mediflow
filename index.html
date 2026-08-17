@@ -136,6 +136,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
 .card-pending{opacity:.5}
 .rep-note{font-size:10px;color:var(--dim);flex-shrink:0}
 </style>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -187,7 +188,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
     </div>
     <div>
       <div class="sec-title">Insights</div>
-      <button class="btn-dl" id="btnDl">⬇ Download CSV</button>
+      <button class="btn-dl" id="btnDl">⬇ Download Report</button>
     </div>
   </div>
 
@@ -245,7 +246,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
     </div>
     <div class="csv-modal-body" id="repModalBody"></div>
     <div class="csv-modal-foot">
-      <button class="csv-start-btn" id="repModalDl">⬇ Download CSV</button>
+      <button class="csv-start-btn" id="repModalDl">⬇ Download Report</button>
     </div>
   </div>
 </div>
@@ -313,6 +314,13 @@ function fmt(ms){
 }
 function setLog(h){ document.getElementById('logbar').innerHTML='› '+h; }
 function fmtCM(ms){ return ms==null||ms<0?'—':Math.round(ms/MIN_MS)+'m'; }
+function clinicClock(){
+  if(!S||!S.startAt) return '';
+  const base=(S.paused&&S.pausedAt)?S.pausedAt:Date.now();
+  const cm=Math.max(0,Math.min((base-S.startAt-S.pauseMs)/MIN_MS,DAY_MIN));
+  const m=OPEN_MIN+Math.round(cm);
+  return `${pad(Math.floor(m/60))}:${pad(m%60)}`;
+}
 
 // ── Workflow Engine ──
 function etaFor(r){
@@ -333,7 +341,7 @@ function nextTarget(p){
 
 // ── Dispatch Engine ──
 function logDecision(p,r,waited){
-  S.decisionLog.push({t:Date.now(),pid:p.id,source:p.source,urg:p.urg,resource:r,waited,reason:p.reason});
+  S.decisionLog.push({t:Date.now(),clock:clinicClock(),pid:p.id,source:p.source,urg:p.urg,resource:r,waited,reason:p.reason});
   if(S.decisionLog.length>1000) S.decisionLog.shift();
 }
 function dispatch(r){
@@ -398,6 +406,7 @@ function endService(p,r,sIdx,uid){
   if(stage.r.every(res=>p.doneHere.includes(res))){ p.step++; p.doneHere=[]; }
   if(p.step>=PATHS[p.path].length){
     p.done=true; p.opState='DONE'; p.curR=null; p.stIdx=null;
+    p.doneClock=clinicClock();
     S.stats.done++;
     setLog(`<em style="color:var(--acc)">${p.id}</em> ✓ completed`);
     render(); dispatch(r); return;
@@ -536,6 +545,7 @@ function showReplayReport(){
       <td>${p.id}</td>
       <td>${p.urg.replace(/_/g,' ')}</td>
       <td>${p.csvArrivalTime||'—'}</td>
+      <td>${p.doneClock||'—'}</td>
       <td>${p.actualWaitMin}</td>
       <td>${sim}${p.done?'':' *'}</td>
       <td style="color:${delta<0?'var(--acc)':delta>0?'var(--hi)':'var(--mut)'}">${delta>0?'+':''}${delta}</td>
@@ -549,7 +559,7 @@ function showReplayReport(){
       — <span style="color:${dAvg<0?'var(--acc)':'var(--hi)'}">${dAvg<0?'−':'+'}${Math.abs(dAvg).toFixed(1)} min ${dAvg<0?'saved':'added'} per patient</span></div>
     <div class="csv-table-wrap">
       <table class="csv-table">
-        <thead><tr><th>ID</th><th>Urgency</th><th>Arrival</th><th>Actual wait (min)</th><th>Algorithm wait (min)</th><th>Δ (min)</th></tr></thead>
+        <thead><tr><th>ID</th><th>Urgency</th><th>Arrival</th><th>Left</th><th>Actual wait (min)</th><th>Algorithm wait (min)</th><th>Δ (min)</th></tr></thead>
         <tbody>${rowsHtml}</tbody>
       </table>
     </div>
@@ -610,38 +620,60 @@ function applyBtns(){
   document.getElementById('btnCsvLabel').style.cursor=run?'not-allowed':'pointer';
 }
 
-// ── Download CSV ──
+// ── Download Report (Excel workbook; CSV fallback) ──
 function downloadCSV(){
   if(!S||S.running) return;
   const d=new Date().toISOString().slice(0,19).replace('T',' ');
-  const avgW=S.stats.waitN?Math.round(S.stats.waitSum/S.stats.waitN/1000):0;
+  const arrived=S.patients.filter(p=>p.opState!=='PENDING');
+  const avgW=arrived.length?Math.round(arrived.reduce((s,p)=>s+p.totalWait,0)/arrived.length/MIN_MS):0;
   const cr=S.stats.total?Math.round(S.stats.done/S.stats.total*100):0;
-  const rCsv=Object.keys(SR).map(r=>{
-    const sv=S.servedCount[r]||0;
-    return `${RNAME[r]},${S.stations[r].length},${sv},${SR_MIN[r]}`;
-  }).join('\n');
-  const pCsv=S.patients.map(p=>`${p.id},${p.source||'realtime'},${p.urg.replace(/_/g,' ')},${p.path},${p.done?'Completed':p.opState},"${p.step}/${PATHS[p.path].length}",${Math.round(p.totalWait/1000)}`).join('\n');
-  const dCsv=S.decisionLog.map(l=>`${new Date(l.t).toISOString().slice(11,19)},${l.pid},${l.source||'realtime'},${l.urg.replace(/_/g,' ')},${RNAME[l.resource]},"${(l.reason||'').replace(/"/g,'""')}"`).join('\n');
-  const csv=[
-    'MEDIFLOW SIMULATION INSIGHTS',`Generated,${d}`,'',
-    'SUMMARY','Metric,Value',`Total Patients,${S.stats.total}`,`Completed,${S.stats.done}`,
-    `Completion Rate,${cr}%`,`Timeouts,${S.stats.timeouts}`,`Average Wait Time (sec),${avgW}`,'',
-    'RESOURCE PERFORMANCE','Resource,Stations,Patients Served,Service Time (clinic min)',rCsv,'',
-    'PATIENT LOG','Patient ID,Source,Urgency,Pathway,Status,Steps,Total Wait (sec)',pCsv,'',
-    'DECISION LOG','Time,Patient ID,Source,Urgency,Resource,Reason',dCsv,
+
+  // Tab 1 — Mediflow Insights: summary, resource performance, replay comparison
+  const insights=[
+    ['MEDIFLOW SIMULATION INSIGHTS'],['Generated',d],[],
+    ['SUMMARY'],['Metric','Value'],
+    ['Total Patients',S.stats.total],['Completed',S.stats.done],
+    ['Completion Rate',cr+'%'],['Timeouts',S.stats.timeouts],
+    ['Average Wait per Patient (clinic min)',avgW],[],
+    ['RESOURCE PERFORMANCE'],['Resource','Stations','Patients Served','Service Time (clinic min)'],
+    ...Object.keys(SR).map(r=>[RNAME[r],S.stations[r].length,S.servedCount[r]||0,SR_MIN[r]]),
   ];
   const rep=replayRows();
   if(rep.length){
-    const cfgStr=Object.keys(SR).map(r=>`${RNAME[r]} x${S.stations[r].length}`).join(' | ');
-    csv.push('','REPLAY COMPARISON (clinic minutes)',`Resource Config,"${cfgStr}"`,
-      'Patient ID,Urgency,Arrival,Actual Wait (min),Algorithm Wait (min),Delta (min),Completed',
-      ...rep.map(({p,sim,delta})=>`${p.id},${p.urg.replace(/_/g,' ')},${p.csvArrivalTime||''},${p.actualWaitMin},${sim},${delta},${p.done?'Yes':'No'}`));
+    insights.push([],['REPLAY COMPARISON (clinic minutes)'],
+      ['Resource Config',Object.keys(SR).map(r=>`${RNAME[r]} x${S.stations[r].length}`).join(' | ')],
+      ['Patient ID','Urgency','Arrival','Left Clinic','Actual Wait (min)','Algorithm Wait (min)','Delta (min)','Completed'],
+      ...rep.map(({p,sim,delta})=>[p.id,p.urg.replace(/_/g,' '),p.csvArrivalTime||'',p.doneClock||'',p.actualWaitMin,sim,delta,p.done?'Yes':'No']));
   }
-  const csvText=csv.join('\n');
+
+  // Tab 2 — System Logs: every dispatch decision, then per-patient outcomes
+  const logs=[
+    ['DECISION LOG'],['Clinic Time','Patient ID','Source','Urgency','Resource','Waited (min)','Reason'],
+    ...S.decisionLog.map(l=>[l.clock||'',l.pid,l.source||'realtime',l.urg.replace(/_/g,' '),RNAME[l.resource],Math.round(l.waited/MIN_MS),l.reason||'']),
+    [],
+    ['PATIENT LOG'],['Patient ID','Source','Urgency','Pathway','Status','Steps','Total Wait (clinic min)'],
+    ...S.patients.map(p=>[p.id,p.source||'realtime',p.urg.replace(/_/g,' '),p.path,p.done?'Completed':p.opState,`${p.step}/${PATHS[p.path].length}`,Math.round(p.totalWait/MIN_MS)]),
+  ];
+
+  const day=new Date().toISOString().slice(0,10);
+  const X=typeof XLSX!=='undefined'?XLSX:null;
+  if(X){
+    const wb=X.utils.book_new();
+    const ws1=X.utils.aoa_to_sheet(insights);
+    ws1['!cols']=[{wch:28},{wch:22},{wch:12},{wch:12},{wch:16},{wch:19},{wch:11},{wch:10}];
+    const ws2=X.utils.aoa_to_sheet(logs);
+    ws2['!cols']=[{wch:11},{wch:11},{wch:9},{wch:20},{wch:13},{wch:12},{wch:46}];
+    X.utils.book_append_sheet(wb,ws1,'Mediflow Insights');
+    X.utils.book_append_sheet(wb,ws2,'System Logs');
+    X.writeFile(wb,`mediflow_${day}.xlsx`);
+    return;
+  }
+  const esc=v=>{v=String(v==null?'':v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
+  const csvText=[...insights,[],['SYSTEM LOGS'],...logs].map(r=>r.map(esc).join(',')).join('\n');
   const blob=new Blob([csvText],{type:'text/csv'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
-  a.href=url; a.download=`mediflow_${new Date().toISOString().slice(0,10)}.csv`;
+  a.href=url; a.download=`mediflow_${day}.csv`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
 }
 
