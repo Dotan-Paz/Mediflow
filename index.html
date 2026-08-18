@@ -258,13 +258,13 @@ const REAL_MS   = 60000;            // one clinic day in real ms — the single 
 const DAY_MIN   = 480;              // 8-hour clinic day, 08:00–16:00
 const MIN_MS    = REAL_MS/DAY_MIN;  // real ms per clinic minute
 const OPEN_MIN  = 8*60;             // clinic opens 08:00
-const TO_MS     = 1000;
+const TO_MS     = 3*MIN_MS;         // no-show timeout: 3 clinic minutes (FR-6.2.1)
 const ASSIGN_MS = MIN_MS;           // assignment→service handoff, modeled as 1 clinic minute
 const ARRIVE_MIN= 28;               // auto walk-in every 28 clinic minutes
 const ARRIVE_MS = ARRIVE_MIN*MIN_MS;
 
 // service times in clinic minutes; real-ms values derived so changing REAL_MS keeps the model identical
-const SR_MIN = { SEC:48, DOC:20, US:8, NUR:16, LAB:32, PSY:32 };
+const SR_MIN = { SEC:45, DOC:25, US:7, NUR:10, LAB:15, PSY:30 };
 const SR    = Object.fromEntries(Object.entries(SR_MIN).map(([r,m])=>[r,m*MIN_MS]));
 const RNAME = { SEC:'Reception', DOC:'Doctor', US:'Ultrasound', NUR:'Nurse', LAB:'Lab', PSY:'Psychologist' };
 const RCOL  = { SEC:'#a78bfa', DOC:'#60a5fa', US:'#34d399', NUR:'#fbbf24', LAB:'#f87171', PSY:'#e879f9' };
@@ -323,10 +323,31 @@ function clinicClock(){
 }
 
 // ── Workflow Engine ──
-function etaFor(r){
-  const sts=S.stations[r];
-  if(sts.some(s=>!s.busy)) return 0;
-  return Math.max(0,Math.min(...sts.map(s=>s.endAt||Infinity))-Date.now());
+// non-recursive equivalent of "nextTarget(p)===r" for queue counting:
+// nextTarget itself calls etaFor on AND stages, so etaFor cannot call it back
+function wouldTarget(p,r){
+  if(p.done||p.opState!=='WAITING') return false;
+  const stages=PATHS[p.path];
+  if(p.step>=stages.length) return false;
+  const stage=stages[p.step];
+  const rem=stage.r.filter(x=>!p.doneHere.includes(x));
+  if(!rem.length) return false;
+  return stage.t==='seq'?rem[0]===r:rem.includes(r);
+}
+// queue-aware expected wait for resource r (real ms): seat the patients already
+// waiting for r onto its stations (each available at its remaining busy time,
+// each seating occupying SR[r]), then return when the NEXT arrival would be served
+function etaFor(r,excl){
+  const now=Date.now();
+  const avail=S.stations[r].map(s=>!s.busy?0:(s.endAt?Math.max(0,s.endAt-now):ASSIGN_MS+SR[r]));
+  let qN=0;
+  for(const p of S.patients) if(p!==excl&&wouldTarget(p,r)) qN++;
+  for(let i=0;i<qN;i++){
+    let m=0;
+    for(let j=1;j<avail.length;j++) if(avail[j]<avail[m]) m=j;
+    avail[m]+=SR[r];
+  }
+  return Math.min(...avail);
 }
 function nextTarget(p){
   if(p.done) return null;
@@ -336,7 +357,7 @@ function nextTarget(p){
   const rem=stage.r.filter(r=>!p.doneHere.includes(r));
   if(!rem.length) return null;
   if(stage.t==='seq') return rem[0];
-  return [...rem].sort((a,b)=>etaFor(a)-etaFor(b))[0];
+  return [...rem].sort((a,b)=>etaFor(a,p)-etaFor(b,p))[0];
 }
 
 // ── Dispatch Engine ──
@@ -350,14 +371,19 @@ function dispatch(r){
   const now=Date.now();
   const Q=S.patients.filter(p=>!p.done&&p.opState==='WAITING'&&nextTarget(p)===r);
   if(!Q.length) return;
+  // decision order per the design doc: urgency → returned-to-head flag → waited time
   Q.sort((a,b)=>{
     const ud=UBIN[b.urg]-UBIN[a.urg];
     if(ud) return ud;
+    const hd=(b.returnedToHead?1:0)-(a.returnedToHead?1:0);
+    if(hd) return hd;
     return (now-(b.waitSince||0))-(now-(a.waitSince||0));
   });
   const p=Q[0];
   const waited=p.waitSince?now-p.waitSince:0;
-  p.reason=UBIN[p.urg]?`Urgent (${p.urg.replace(/_/g,' ')}) — waited ${fmtCM(waited)}`:`Longest wait (${fmtCM(waited)})`;
+  p.reason=p.returnedToHead
+    ?`Returned to head after timeout — ${UBIN[p.urg]?'urgent':'non-urgent'}, waited ${fmtCM(waited)}`
+    :UBIN[p.urg]?`Urgent (${p.urg.replace(/_/g,' ')}) — waited ${fmtCM(waited)}`:`Longest wait (${fmtCM(waited)})`;
   p.opState='ASSIGNED'; p.curR=r; p.stIdx=sIdx;
   S.stations[r][sIdx].busy=true;
   logDecision(p,r,waited);
@@ -369,9 +395,10 @@ function dispatch(r){
     S.stats.timeouts++;
     const st=S.stations[r][sIdx];
     st.busy=false; st.patient=null; st.endAt=null; st.svcRef=null;
-    p.opState='WAITING'; p.curR=null; p.stIdx=null; p.waitSince=Date.now();
+    // FR-6.2.1: return to the HEAD of her urgency class — keep accumulated wait, flag for priority
+    p.opState='WAITING'; p.curR=null; p.stIdx=null; p.returnedToHead=true;
     delete S.toRefs[p.id];
-    setLog(`<span style="color:var(--mid)">⚠ Timeout: ${p.id} missed ${RNAME[r]}</span>`);
+    setLog(`<span style="color:var(--mid)">⚠ Timeout: ${p.id} missed ${RNAME[r]} — returned to head of queue</span>`);
     render(); dispatch(r);
   },TO_MS);
   S.toRefs[p.id]=toRef;
@@ -386,7 +413,7 @@ function beginService(p,r,sIdx,uid){
   const now=Date.now();
   const waited=p.waitSince?now-p.waitSince:0;
   p.totalWait+=waited; S.stats.waitSum+=waited; S.stats.waitN++;
-  p.opState='IN_SERVICE'; p.waitSince=null;
+  p.opState='IN_SERVICE'; p.waitSince=null; p.returnedToHead=false; // h(p) resets on service start
   const st=S.stations[r][sIdx];
   st.patient=p; st.endAt=now+SR[r];
   setLog(`<em style="color:var(--acc)">${p.id}</em> started ${RNAME[r]} (${SR_MIN[r]} min)`);
@@ -431,7 +458,7 @@ function autoArrive(){
 
 function makePatient(id,urg,startNow,source='realtime'){
   const path=urg==='PERIOD_URGENT'?'PERIOD':urg==='EXCEPTION_URGENT'?'EXCEPTION':'INTAKE';
-  return {id,urg,path,source,opState:'WAITING',step:0,doneHere:[],curR:null,stIdx:null,waitSince:startNow?Date.now():null,totalWait:0,done:false,reason:''};
+  return {id,urg,path,source,opState:'WAITING',step:0,doneHere:[],curR:null,stIdx:null,waitSince:startNow?Date.now():null,totalWait:0,done:false,reason:'',returnedToHead:false};
 }
 
 // ── Controls ──
@@ -443,7 +470,7 @@ function startSim(){
   for(const p of pre){
     // fresh runtime state so a finished roster can be re-run under a new config
     p.step=0; p.doneHere=[]; p.done=false; p.opState='WAITING';
-    p.curR=null; p.stIdx=null; p.totalWait=0; p.reason='';
+    p.curR=null; p.stIdx=null; p.totalWait=0; p.reason=''; p.returnedToHead=false;
     if(p.arrivalOffsetMin!=null&&p.arrivalOffsetMin>0){
       p.opState='PENDING'; p.waitSince=null; S.patients.push(p);
     } else {
@@ -688,7 +715,7 @@ function renderWaiting(){
   const el=document.getElementById('panelWait');
   const now=Date.now();
   const list=(S?S.patients:[]).filter(p=>p.opState==='WAITING'&&!p.done)
-    .sort((a,b)=>{const ud=UBIN[b.urg]-UBIN[a.urg];if(ud)return ud;return(now-(b.waitSince||0))-(now-(a.waitSince||0));});
+    .sort((a,b)=>{const ud=UBIN[b.urg]-UBIN[a.urg];if(ud)return ud;const hd=(b.returnedToHead?1:0)-(a.returnedToHead?1:0);if(hd)return hd;return(now-(b.waitSince||0))-(now-(a.waitSince||0));});
   const pend=(S?S.patients:[]).filter(p=>p.opState==='PENDING').sort((a,b)=>a.arrivalOffsetMin-b.arrivalOffsetMin);
   document.getElementById('cWait').textContent=list.length;
   if(!list.length&&!pend.length){el.innerHTML='<div class="empty"><div class="empty-icon">⏳</div><div class="empty-text">No patients waiting</div></div>';return;}
