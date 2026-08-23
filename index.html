@@ -179,6 +179,10 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
           <option value="EXCEPTION_URGENT">Exception Urgent</option>
         </select>
       </div>
+      <div class="form-row" style="flex-direction:row;align-items:center;gap:6px">
+        <input type="checkbox" id="inIsNew" checked style="width:auto"/>
+        <label style="text-transform:none;font-size:11px;color:var(--mut)" for="inIsNew">New patient (opens a file) — non-urgent only</label>
+      </div>
       <button class="btn-add" id="btnAdd">+ Add to Queue</button>
     </div>
     <div>
@@ -267,13 +271,23 @@ const ARRIVE_MS = ARRIVE_MIN*MIN_MS;
 // service times in clinic minutes; real-ms values derived so changing REAL_MS keeps the model identical
 const SR_MIN = { SEC:45, DOC:25, US:7, NUR:10, LAB:15, PSY:30 };
 const SR    = Object.fromEntries(Object.entries(SR_MIN).map(([r,m])=>[r,m*MIN_MS]));
+const SEC_RETURNING_MIN = 5; // quick sign-in: returning patients, and any urgent patient (never "new")
+// Reception takes the full open-file time only for a new, non-urgent patient; everyone else just signs in.
+function svcDuration(p,r){
+  if(r!=='SEC') return SR[r];
+  const isNewVisit=p.urg==='INTAKE_NON_URGENT'&&p.isNew!==false;
+  return (isNewVisit?SR_MIN.SEC:SEC_RETURNING_MIN)*MIN_MS;
+}
 const RNAME = { SEC:'Reception', DOC:'Doctor', US:'Ultrasound', NUR:'Nurse', LAB:'Lab', PSY:'Psychologist' };
 const RCOL  = { SEC:'#a78bfa', DOC:'#60a5fa', US:'#34d399', NUR:'#fbbf24', LAB:'#f87171', PSY:'#e879f9' };
 const UBIN  = { EXCEPTION_URGENT:1, PERIOD_URGENT:1, INTAKE_NON_URGENT:0 };
 const UMIX  = ['INTAKE_NON_URGENT','INTAKE_NON_URGENT','INTAKE_NON_URGENT','INTAKE_NON_URGENT','PERIOD_URGENT','PERIOD_URGENT','EXCEPTION_URGENT'];
 
+// Psychologist is intake-only, and only for a NEW patient's first visit — a
+// returning intake patient skips it (INTAKE_RETURNING), same as the SEC time split.
 const PATHS = {
-  INTAKE:    [{t:'seq',r:['SEC']},{t:'and',r:['DOC','US']},{t:'and',r:['NUR','PSY']},{t:'seq',r:['DOC']}],
+  INTAKE:            [{t:'seq',r:['SEC']},{t:'and',r:['DOC','US']},{t:'and',r:['NUR','PSY']},{t:'seq',r:['DOC']}],
+  INTAKE_RETURNING:  [{t:'seq',r:['SEC']},{t:'and',r:['DOC','US']},{t:'seq',r:['NUR']},{t:'seq',r:['DOC']}],
   PERIOD:    [{t:'and',r:['LAB','US']},{t:'seq',r:['DOC']},{t:'seq',r:['NUR']}],
   EXCEPTION: [{t:'seq',r:['DOC']},{t:'seq',r:['NUR']},{t:'seq',r:['LAB']},{t:'seq',r:['DOC']}],
 };
@@ -341,12 +355,12 @@ function wouldTarget(p,r){
 function etaFor(r,excl){
   const now=Date.now();
   const avail=S.stations[r].map(s=>!s.busy?0:(s.endAt?Math.max(0,s.endAt-now):ASSIGN_MS+SR[r]));
-  let qN=0;
-  for(const p of S.patients) if(p!==excl&&wouldTarget(p,r)) qN++;
-  for(let i=0;i<qN;i++){
+  const queued=[];
+  for(const p of S.patients) if(p!==excl&&wouldTarget(p,r)) queued.push(svcDuration(p,r));
+  for(const d of queued){
     let m=0;
     for(let j=1;j<avail.length;j++) if(avail[j]<avail[m]) m=j;
-    avail[m]+=SR[r];
+    avail[m]+=d;
   }
   return Math.min(...avail);
 }
@@ -416,13 +430,14 @@ function beginService(p,r,sIdx,uid){
   p.totalWait+=waited; S.stats.waitSum+=waited; S.stats.waitN++;
   p.opState='IN_SERVICE'; p.waitSince=null; p.returnedToHead=false; // h(p) resets on service start
   const st=S.stations[r][sIdx];
-  st.patient=p; st.endAt=now+SR[r];
-  setLog(`<em style="color:var(--acc)">${p.id}</em> started ${RNAME[r]} (${SR_MIN[r]} min)`);
+  const dur=svcDuration(p,r);
+  st.patient=p; st.endAt=now+dur;
+  setLog(`<em style="color:var(--acc)">${p.id}</em> started ${RNAME[r]} (${Math.round(dur/MIN_MS)} min)`);
   render();
   const ref=setTimeout(()=>{
     if(!S||S.uid!==uid||p.opState!=='IN_SERVICE') return;
     endService(p,r,sIdx,uid);
-  },SR[r]);
+  },dur);
   st.svcRef=ref;
 }
 
@@ -450,16 +465,16 @@ function autoArrive(){
   if(!S||!S.running||S.paused) return;
   const urg=UMIX[Math.floor(Math.random()*UMIX.length)];
   const id='P-'+String(S.nextPid++).padStart(3,'0');
-  const p=makePatient(id,urg,true);
+  const p=makePatient(id,urg,true,'realtime',Math.random()<0.5);
   S.patients.push(p); S.stats.total++;
   setLog(`<em style="color:var(--acc)">${id}</em> arrived [${urg.replace(/_/g,' ')}]`);
   render();
   const r=nextTarget(p); if(r) dispatch(r);
 }
 
-function makePatient(id,urg,startNow,source='realtime'){
-  const path=urg==='PERIOD_URGENT'?'PERIOD':urg==='EXCEPTION_URGENT'?'EXCEPTION':'INTAKE';
-  return {id,urg,path,source,opState:'WAITING',step:0,doneHere:[],curR:null,stIdx:null,waitSince:startNow?Date.now():null,totalWait:0,done:false,reason:'',returnedToHead:false};
+function makePatient(id,urg,startNow,source='realtime',isNew=true){
+  const path=urg==='PERIOD_URGENT'?'PERIOD':urg==='EXCEPTION_URGENT'?'EXCEPTION':(isNew?'INTAKE':'INTAKE_RETURNING');
+  return {id,urg,path,source,isNew,opState:'WAITING',step:0,doneHere:[],curR:null,stIdx:null,waitSince:startNow?Date.now():null,totalWait:0,done:false,reason:'',returnedToHead:false};
 }
 
 // ── Controls ──
@@ -677,8 +692,8 @@ function downloadCSV(){
     const repName=rep.some(x=>x.p.name);
     insights.push([],['REPLAY COMPARISON (clinic minutes)'],
       ['Resource Config',Object.keys(SR).map(r=>`${RNAME[r]} x${S.stations[r].length}`).join(' | ')],
-      ['Patient ID',...(repName?['Name']:[]),'Urgency','Arrival','Left Clinic','Actual Wait (min)','Algorithm Wait (min)','Delta (min)','Completed'],
-      ...rep.map(({p,sim,delta})=>[p.id,...(repName?[p.name||'']:[]),p.urg.replace(/_/g,' '),p.csvArrivalTime||'',p.doneClock||'',p.actualWaitMin,sim,delta,p.done?'Yes':'No']));
+      ['Patient ID',...(repName?['Name']:[]),'Urgency','New Patient','Arrival','Left Clinic','Actual Wait (min)','Algorithm Wait (min)','Delta (min)','Completed'],
+      ...rep.map(({p,sim,delta})=>[p.id,...(repName?[p.name||'']:[]),p.urg.replace(/_/g,' '),p.urg==='INTAKE_NON_URGENT'?(p.isNew?'Yes':'No'):'—',p.csvArrivalTime||'',p.doneClock||'',p.actualWaitMin,sim,delta,p.done?'Yes':'No']));
   }
 
   // Tab 2 — System Logs: every dispatch decision, then per-patient outcomes
@@ -686,8 +701,8 @@ function downloadCSV(){
     ['DECISION LOG'],['Clinic Time','Patient ID','Source','Urgency','Resource','Waited (min)','Reason'],
     ...S.decisionLog.map(l=>[l.clock||'',l.pid,l.source||'realtime',l.urg.replace(/_/g,' '),RNAME[l.resource],Math.round(l.waited/MIN_MS),l.reason||'']),
     [],
-    ['PATIENT LOG'],['Patient ID','Source','Urgency','Pathway','Status','Steps','Total Wait (clinic min)'],
-    ...S.patients.map(p=>[p.id,p.source||'realtime',p.urg.replace(/_/g,' '),p.path,p.done?'Completed':p.opState,`${p.step}/${PATHS[p.path].length}`,Math.round(p.totalWait/MIN_MS)]),
+    ['PATIENT LOG'],['Patient ID','Source','Urgency','New Patient','Pathway','Status','Steps','Total Wait (clinic min)'],
+    ...S.patients.map(p=>[p.id,p.source||'realtime',p.urg.replace(/_/g,' '),p.urg==='INTAKE_NON_URGENT'?(p.isNew?'Yes':'No'):'—',p.path,p.done?'Completed':p.opState,`${p.step}/${PATHS[p.path].length}`,Math.round(p.totalWait/MIN_MS)]),
   ];
 
   const day=new Date().toISOString().slice(0,10);
@@ -845,7 +860,7 @@ function parseCSVText(text){
   const cells=lines.map(l=>l.split(',').map(c=>c.trim().replace(/^"|"$/g,'')));
   const head=cells[0].map(c=>c.toLowerCase());
   if(head.includes('enter_time')){
-    const ix={iId:head.indexOf('patient_id'),iUrg:head.indexOf('urgency'),iIn:head.indexOf('enter_time'),iAgg:head.indexOf('aggregated_waiting_time_min'),iName:-1};
+    const ix={iId:head.indexOf('patient_id'),iUrg:head.indexOf('urgency'),iIn:head.indexOf('enter_time'),iOut:head.indexOf('exit_time'),iAgg:head.indexOf('aggregated_waiting_time_min'),iName:-1};
     if(ix.iId<0||ix.iUrg<0||ix.iIn<0) return {format:'eventlog',rows:[]};
     return {format:'eventlog',rows:groupEventRows(cells.slice(1),ix)};
   }
@@ -859,9 +874,14 @@ function parseCSVText(text){
   }
   let rows=cells;
   if(!normalizeUrg(rows[0][1])) rows=rows.slice(1);
-  return {format:'roster',rows:rows.filter(r=>r[0]).map(r=>({id:r[0],urgRaw:r[1],arrival:r[2]||null}))};
+  return {format:'roster',rows:rows.filter(r=>r[0]).map(r=>({id:r[0],urgRaw:r[1],arrival:r[2]||null,isNew:parseIsNew(r[3])}))};
+}
+function parseIsNew(raw){
+  if(raw==null||raw==='') return true;
+  return !['returning','return','existing','no','n','0','false'].includes(raw.trim().toLowerCase());
 }
 const TIME_RE=/^\d{1,2}:\d{2}$/;
+const NEW_VISIT_MIN=20; // first-visit duration at/above this (min) infers a new-patient file-opening, per SEC_RETURNING_MIN vs SR_MIN.SEC
 function inferEventColumns(sample,iUrg){
   if(!sample||sample.length<4) return null;
   const timeCols=[];
@@ -877,23 +897,29 @@ function inferEventColumns(sample,iUrg){
     if(i===iUrg||i===iId||timeCols.includes(i)) continue;
     if(sample[i]&&!/^[\d.\-]*$/.test(sample[i])){ iName=i; break; }
   }
-  return {iId,iUrg,iIn:timeCols[0],iAgg:sample.length-1,iName}; // cumulative wait is the last column
+  return {iId,iUrg,iIn:timeCols[0],iOut:timeCols[1],iAgg:sample.length-1,iName}; // cumulative wait is the last column
 }
 // Step-log: one row per patient step. Collapse to one record per patient:
 // arrival = earliest enter_time, actual wait = max cumulative wait, name kept if present.
+// isNew is inferred from the duration of that earliest (first-secretary) row: the historical
+// format has no explicit new/returning flag, so a long first visit implies file-opening.
 function groupEventRows(body,ix){
   const byId=new Map();
   for(const r of body){
     const id=r[ix.iId]; if(!id) continue;
     let g=byId.get(id);
-    if(!g){ g={id,urgRaw:r[ix.iUrg],name:ix.iName>=0?(r[ix.iName]||'').replace(/[<>&"]/g,''):null,arrivalMin:null,actualWaitMin:0}; byId.set(id,g); }
+    if(!g){ g={id,urgRaw:r[ix.iUrg],name:ix.iName>=0?(r[ix.iName]||'').replace(/[<>&"]/g,''):null,arrivalMin:null,actualWaitMin:0,isNew:true}; byId.set(id,g); }
     const em=timeToMin(r[ix.iIn]);
-    if(em!=null&&(g.arrivalMin==null||em<g.arrivalMin)) g.arrivalMin=em;
+    if(em!=null&&(g.arrivalMin==null||em<g.arrivalMin)){
+      g.arrivalMin=em;
+      const ex=ix.iOut>=0?timeToMin(r[ix.iOut]):null;
+      if(ex!=null) g.isNew=(ex-em)>=NEW_VISIT_MIN;
+    }
     const w=ix.iAgg>=0?parseFloat(r[ix.iAgg]):NaN;
     if(!isNaN(w)&&w>g.actualWaitMin) g.actualWaitMin=w;
   }
   return [...byId.values()].map(g=>({
-    id:g.id, urgRaw:g.urgRaw, name:g.name||null,
+    id:g.id, urgRaw:g.urgRaw, name:g.name||null, isNew:g.isNew,
     arrival:g.arrivalMin!=null?`${pad(Math.floor(g.arrivalMin/60))}:${pad(g.arrivalMin%60)}`:null,
     arrivalMin:g.arrivalMin!=null?Math.max(0,g.arrivalMin-OPEN_MIN):null,
     actualWaitMin:g.actualWaitMin,
@@ -913,7 +939,7 @@ function importCSVPatients(rows){
     const c=classifyRow(row,seen);
     if(c.status==='dup'){ dup++; continue; }
     if(c.status==='bad'){ bad++; continue; }
-    const p=makePatient(row.id,c.urg,false,'csv');
+    const p=makePatient(row.id,c.urg,false,'csv',row.isNew!==false);
     if(row.name) p.name=row.name;
     if(row.arrival) p.csvArrivalTime=row.arrival;
     if(row.arrivalMin!=null) p.arrivalOffsetMin=row.arrivalMin;
@@ -936,10 +962,11 @@ document.getElementById('btnDl').addEventListener('click',    downloadCSV);
 document.getElementById('btnAdd').addEventListener('click', () => {
   const rawId=document.getElementById('inId').value.trim();
   const urg=document.getElementById('inUrg').value;
+  const isNew=document.getElementById('inIsNew').checked;
   document.getElementById('inId').value='';
   const id=rawId||'P-'+String(S.nextPid++).padStart(3,'0');
   if(S.patients.find(p=>p.id===id)){setLog(`⚠ ID "${id}" already exists`);return;}
-  const p=makePatient(id,urg,S.running);
+  const p=makePatient(id,urg,S.running,'realtime',isNew);
   S.patients.push(p);
   if(S.running){
     S.stats.total++;
@@ -977,21 +1004,24 @@ function renderCsvPreview(parsed){
     if(c.status==='ok'){ okCount++; seen.add(row.id); }
     else if(c.status==='dup') dupCount++;
     else badCount++;
+    const urgResolved=c.urg||row.urgRaw;
+    const newCell=urgResolved==='INTAKE_NON_URGENT'?(row.isNew!==false?'Yes':'No'):'—';
     return `<tr class="cst-${c.status}">
       <td>${row.id||'—'}</td>
       ${hasName?`<td dir="auto">${row.name||'—'}</td>`:''}
       <td>${c.urg?c.urg.replace(/_/g,' '):(row.urgRaw||'—')}</td>
       <td>${row.arrival||'—'}</td>
+      <td>${newCell}</td>
       ${isLog?`<td>${row.actualWaitMin!=null?row.actualWaitMin:'—'}</td>`:''}
       <td><span class="cst-badge cst-${c.status}">${c.status==='ok'?'OK':c.label}</span></td>
     </tr>`;
   }).join('');
   document.getElementById('csvModalBody').innerHTML=`
-    <div class="csv-summary"><strong>${okCount}</strong> of ${rows.length} patient${rows.length===1?'':'s'} will be imported${dupCount?` · ${dupCount} duplicate`:''}${badCount?` · ${badCount} unrecognized`:''}${isLog?' — <strong>historical replay</strong>: arrivals follow the CSV timeline, auto walk-ins off, comparison report at end of day':''}</div>
+    <div class="csv-summary"><strong>${okCount}</strong> of ${rows.length} patient${rows.length===1?'':'s'} will be imported${dupCount?` · ${dupCount} duplicate`:''}${badCount?` · ${badCount} unrecognized`:''}${isLog?' — <strong>historical replay</strong>: arrivals follow the CSV timeline, auto walk-ins off, comparison report at end of day. "New" is inferred from the first visit’s duration.':''}</div>
     <div class="csv-table-wrap">
       <table class="csv-table">
-        <thead><tr><th>ID</th>${hasName?'<th>Name</th>':''}<th>Urgency</th><th>Arrival</th>${isLog?'<th>Actual wait (min)</th>':''}<th>Status</th></tr></thead>
-        <tbody>${rowsHtml||`<tr><td colspan="${4+(isLog?1:0)+(hasName?1:0)}" style="padding:14px;color:var(--dim)">No rows found</td></tr>`}</tbody>
+        <thead><tr><th>ID</th>${hasName?'<th>Name</th>':''}<th>Urgency</th><th>Arrival</th><th>New</th>${isLog?'<th>Actual wait (min)</th>':''}<th>Status</th></tr></thead>
+        <tbody>${rowsHtml||`<tr><td colspan="${5+(isLog?1:0)+(hasName?1:0)}" style="padding:14px;color:var(--dim)">No rows found</td></tr>`}</tbody>
       </table>
     </div>`;
   document.getElementById('csvModalStart').disabled=okCount===0;
