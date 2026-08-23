@@ -134,6 +134,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
 .countdown-label{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
 .countdown-num{font-family:var(--mono);font-size:48px;font-weight:600;color:var(--acc)}
 .card-pending{opacity:.5}
+.card-name{font-size:10px;color:var(--mut)}
 .rep-note{font-size:10px;color:var(--dim);flex-shrink:0}
 </style>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
@@ -567,9 +568,11 @@ function showReplayReport(){
   if(!rows.length) return;
   const cfgStr=Object.keys(SR).map(r=>`${RNAME[r]}×${S.stations[r].length}`).join(' · ');
   document.getElementById('repModalCfg').textContent=cfgStr;
+  const hasName=rows.some(x=>x.p.name);
   const rowsHtml=rows.map(({p,sim,delta})=>`
     <tr${p.done?'':' style="opacity:.55"'}>
       <td>${p.id}</td>
+      ${hasName?`<td dir="auto">${p.name||'—'}</td>`:''}
       <td>${p.urg.replace(/_/g,' ')}</td>
       <td>${p.csvArrivalTime||'—'}</td>
       <td>${p.doneClock||'—'}</td>
@@ -586,7 +589,7 @@ function showReplayReport(){
       — <span style="color:${dAvg<0?'var(--acc)':'var(--hi)'}">${dAvg<0?'−':'+'}${Math.abs(dAvg).toFixed(1)} min ${dAvg<0?'saved':'added'} per patient</span></div>
     <div class="csv-table-wrap">
       <table class="csv-table">
-        <thead><tr><th>ID</th><th>Urgency</th><th>Arrival</th><th>Left</th><th>Actual wait (min)</th><th>Algorithm wait (min)</th><th>Δ (min)</th></tr></thead>
+        <thead><tr><th>ID</th>${hasName?'<th>Name</th>':''}<th>Urgency</th><th>Arrival</th><th>Left</th><th>Actual wait (min)</th><th>Algorithm wait (min)</th><th>Δ (min)</th></tr></thead>
         <tbody>${rowsHtml}</tbody>
       </table>
     </div>
@@ -667,10 +670,11 @@ function downloadCSV(){
   ];
   const rep=replayRows();
   if(rep.length){
+    const repName=rep.some(x=>x.p.name);
     insights.push([],['REPLAY COMPARISON (clinic minutes)'],
       ['Resource Config',Object.keys(SR).map(r=>`${RNAME[r]} x${S.stations[r].length}`).join(' | ')],
-      ['Patient ID','Urgency','Arrival','Left Clinic','Actual Wait (min)','Algorithm Wait (min)','Delta (min)','Completed'],
-      ...rep.map(({p,sim,delta})=>[p.id,p.urg.replace(/_/g,' '),p.csvArrivalTime||'',p.doneClock||'',p.actualWaitMin,sim,delta,p.done?'Yes':'No']));
+      ['Patient ID',...(repName?['Name']:[]),'Urgency','Arrival','Left Clinic','Actual Wait (min)','Algorithm Wait (min)','Delta (min)','Completed'],
+      ...rep.map(({p,sim,delta})=>[p.id,...(repName?[p.name||'']:[]),p.urg.replace(/_/g,' '),p.csvArrivalTime||'',p.doneClock||'',p.actualWaitMin,sim,delta,p.done?'Yes':'No']));
   }
 
   // Tab 2 — System Logs: every dispatch decision, then per-patient outcomes
@@ -721,6 +725,7 @@ function renderWaiting(){
   if(!list.length&&!pend.length){el.innerHTML='<div class="empty"><div class="empty-icon">⏳</div><div class="empty-text">No patients waiting</div></div>';return;}
   const pendHtml=pend.map(p=>`<div class="card card-pending u-${p.urg}">
       <div class="card-top"><div class="card-id">${p.id}<span class="src-tag src-csv">CSV</span></div><span class="urg-badge ub-${p.urg}">${urgShort(p.urg)}</span></div>
+      ${p.name?`<div class="card-name" dir="auto">${p.name}</div>`:''}
       <div class="card-row"><span class="card-lbl">Arrives</span><span class="card-val">${p.csvArrivalTime||'—'}</span></div>
     </div>`).join('');
   el.innerHTML=list.map(p=>{
@@ -729,6 +734,7 @@ function renderWaiting(){
     const etMs=nxt&&S.running?etaFor(nxt):null;
     return `<div class="card u-${p.urg}">
       <div class="card-top"><div class="card-id">${p.id}${p.source==='csv'?'<span class="src-tag src-csv">CSV</span>':''}</div><span class="urg-badge ub-${p.urg}">${urgShort(p.urg)}</span></div>
+      ${p.name?`<div class="card-name" dir="auto">${p.name}</div>`:''}
       <div class="card-row"><span class="card-lbl">Target</span>${nxt?`<span class="rtag rt-${nxt}">${nxt}</span>`:'<span style="color:var(--dim)">—</span>'}${etMs!==null?`<span class="eta-tag">ETA ${fmtCM(etMs)}</span>`:''}</div>
       <div class="card-row"><span class="card-lbl">Waited</span><span class="wt ${wMs>72*MIN_MS?'wt-hot':''}">${wMs!==null?fmtCM(wMs):'<span style="color:var(--dim)">Pending</span>'}</span><span class="card-lbl" style="margin-left:8px">Step</span><span class="card-val">${p.step+1}/${PATHS[p.path].length}</span></div>
     </div>`;
@@ -748,6 +754,7 @@ function renderProcess(){
     if(p.opState==='IN_SERVICE'&&p.curR!==null&&p.stIdx!==null){const st=S.stations[p.curR]?.[p.stIdx];if(st?.endAt) remHtml=`<div class="card-row"><span class="card-lbl">Done in</span><span class="card-val">${fmtCM(st.endAt-now)}</span></div>`;}
     return `<div class="card u-${p.urg}">
       <div class="card-top"><div class="card-id">${p.id}${p.source==='csv'?'<span class="src-tag src-csv">CSV</span>':''}</div><span class="op-badge op-${p.opState}">${p.opState.replace(/_/g,' ')}</span></div>
+      ${p.name?`<div class="card-name" dir="auto">${p.name}</div>`:''}
       <div class="card-row"><span class="card-lbl">At</span>${p.curR?`<span class="rtag rt-${p.curR}">${p.curR}</span>`:'<span style="color:var(--dim)">—</span>'}${andLeft.length?`<span style="color:var(--acc);font-size:10px"> + </span>${andLeft.map(r=>`<span class="rtag rt-${r}">${r}</span>`).join('')}`:''}</div>
       ${remHtml}
       <div class="card-row"><span class="card-lbl">Step</span><span class="card-val">${p.step+1}/${PATHS[p.path].length}</span><span class="card-lbl" style="margin-left:8px">Wait total</span><span class="card-val">${fmtCM(p.totalWait)}</span></div>
@@ -828,38 +835,65 @@ function timeToMin(t){
   return m?(+m[1])*60+(+m[2]):null;
 }
 function parseCSVText(text){
+  text=text.replace(/^﻿/,'');
   const lines=text.split(/\r\n|\n|\r/).map(l=>l.trim()).filter(l=>l.length);
   if(!lines.length) return {format:'roster',rows:[]};
   const cells=lines.map(l=>l.split(',').map(c=>c.trim().replace(/^"|"$/g,'')));
   const head=cells[0].map(c=>c.toLowerCase());
-  if(head.includes('enter_time')) return parseEventLog(head,cells.slice(1));
+  if(head.includes('enter_time')){
+    const ix={iId:head.indexOf('patient_id'),iUrg:head.indexOf('urgency'),iIn:head.indexOf('enter_time'),iAgg:head.indexOf('aggregated_waiting_time_min'),iName:-1};
+    if(ix.iId<0||ix.iUrg<0||ix.iIn<0) return {format:'eventlog',rows:[]};
+    return {format:'eventlog',rows:groupEventRows(cells.slice(1),ix)};
+  }
+  // headered step-log with localized (e.g. Hebrew) column names: anchor on the
+  // ASCII "URGENCY" header and infer the other columns from the data itself,
+  // so encoding damage to non-ASCII headers can't break detection
+  const iUrgH=head.indexOf('urgency');
+  if(iUrgH>=0&&cells.length>1){
+    const ix=inferEventColumns(cells[1],iUrgH);
+    if(ix) return {format:'eventlog',rows:groupEventRows(cells.slice(1),ix)};
+  }
   let rows=cells;
   if(!normalizeUrg(rows[0][1])) rows=rows.slice(1);
   return {format:'roster',rows:rows.filter(r=>r[0]).map(r=>({id:r[0],urgRaw:r[1],arrival:r[2]||null}))};
 }
-// Historical step-log: one row per patient step (patient_id,urgency,...,enter_time,...,aggregated_waiting_time_min).
-// Collapse to one record per patient: arrival = earliest enter_time, actual wait = max aggregated wait.
-function parseEventLog(head,body){
-  const iId=head.indexOf('patient_id'), iUrg=head.indexOf('urgency'),
-        iIn=head.indexOf('enter_time'), iAgg=head.indexOf('aggregated_waiting_time_min');
-  if(iId<0||iUrg<0||iIn<0) return {format:'eventlog',rows:[]};
+const TIME_RE=/^\d{1,2}:\d{2}$/;
+function inferEventColumns(sample,iUrg){
+  if(!sample||sample.length<4) return null;
+  const timeCols=[];
+  sample.forEach((c,i)=>{ if(TIME_RE.test((c||'').trim())) timeCols.push(i); });
+  if(timeCols.length<2) return null;              // enter+exit; a roster has at most one time column
+  let iId=-1,iName=-1;
+  for(let i=0;i<sample.length;i++){               // patient id: an all-digits column (e.g. national ID)
+    if(i===iUrg||timeCols.includes(i)) continue;
+    if(/^\d{4,}$/.test(sample[i])){ iId=i; break; }
+  }
+  if(iId<0) return null;
+  for(let i=0;i<sample.length;i++){               // name: first remaining non-numeric column
+    if(i===iUrg||i===iId||timeCols.includes(i)) continue;
+    if(sample[i]&&!/^[\d.\-]*$/.test(sample[i])){ iName=i; break; }
+  }
+  return {iId,iUrg,iIn:timeCols[0],iAgg:sample.length-1,iName}; // cumulative wait is the last column
+}
+// Step-log: one row per patient step. Collapse to one record per patient:
+// arrival = earliest enter_time, actual wait = max cumulative wait, name kept if present.
+function groupEventRows(body,ix){
   const byId=new Map();
   for(const r of body){
-    const id=r[iId]; if(!id) continue;
+    const id=r[ix.iId]; if(!id) continue;
     let g=byId.get(id);
-    if(!g){ g={id,urgRaw:r[iUrg],arrivalMin:null,actualWaitMin:0}; byId.set(id,g); }
-    const em=timeToMin(r[iIn]);
+    if(!g){ g={id,urgRaw:r[ix.iUrg],name:ix.iName>=0?(r[ix.iName]||'').replace(/[<>&"]/g,''):null,arrivalMin:null,actualWaitMin:0}; byId.set(id,g); }
+    const em=timeToMin(r[ix.iIn]);
     if(em!=null&&(g.arrivalMin==null||em<g.arrivalMin)) g.arrivalMin=em;
-    const w=iAgg>=0?parseFloat(r[iAgg]):NaN;
+    const w=ix.iAgg>=0?parseFloat(r[ix.iAgg]):NaN;
     if(!isNaN(w)&&w>g.actualWaitMin) g.actualWaitMin=w;
   }
-  const rows=[...byId.values()].map(g=>({
-    id:g.id, urgRaw:g.urgRaw,
+  return [...byId.values()].map(g=>({
+    id:g.id, urgRaw:g.urgRaw, name:g.name||null,
     arrival:g.arrivalMin!=null?`${pad(Math.floor(g.arrivalMin/60))}:${pad(g.arrivalMin%60)}`:null,
     arrivalMin:g.arrivalMin!=null?Math.max(0,g.arrivalMin-OPEN_MIN):null,
     actualWaitMin:g.actualWaitMin,
   }));
-  return {format:'eventlog',rows};
 }
 function classifyRow(row,seen){
   if(!row.id) return {status:'bad',label:'Missing ID'};
@@ -876,6 +910,7 @@ function importCSVPatients(rows){
     if(c.status==='dup'){ dup++; continue; }
     if(c.status==='bad'){ bad++; continue; }
     const p=makePatient(row.id,c.urg,false,'csv');
+    if(row.name) p.name=row.name;
     if(row.arrival) p.csvArrivalTime=row.arrival;
     if(row.arrivalMin!=null) p.arrivalOffsetMin=row.arrivalMin;
     if(row.actualWaitMin!=null) p.actualWaitMin=row.actualWaitMin;
@@ -930,6 +965,7 @@ function renderCsvError(msg){
 }
 function renderCsvPreview(parsed){
   const rows=parsed.rows, isLog=parsed.format==='eventlog';
+  const hasName=rows.some(r=>r.name);
   const seen=new Set(S.patients.map(p=>p.id));
   let okCount=0,dupCount=0,badCount=0;
   const rowsHtml=rows.map(row=>{
@@ -939,6 +975,7 @@ function renderCsvPreview(parsed){
     else badCount++;
     return `<tr class="cst-${c.status}">
       <td>${row.id||'—'}</td>
+      ${hasName?`<td dir="auto">${row.name||'—'}</td>`:''}
       <td>${c.urg?c.urg.replace(/_/g,' '):(row.urgRaw||'—')}</td>
       <td>${row.arrival||'—'}</td>
       ${isLog?`<td>${row.actualWaitMin!=null?row.actualWaitMin:'—'}</td>`:''}
@@ -949,8 +986,8 @@ function renderCsvPreview(parsed){
     <div class="csv-summary"><strong>${okCount}</strong> of ${rows.length} patient${rows.length===1?'':'s'} will be imported${dupCount?` · ${dupCount} duplicate`:''}${badCount?` · ${badCount} unrecognized`:''}${isLog?' — <strong>historical replay</strong>: arrivals follow the CSV timeline, auto walk-ins off, comparison report at end of day':''}</div>
     <div class="csv-table-wrap">
       <table class="csv-table">
-        <thead><tr><th>ID</th><th>Urgency</th><th>Arrival</th>${isLog?'<th>Actual wait (min)</th>':''}<th>Status</th></tr></thead>
-        <tbody>${rowsHtml||`<tr><td colspan="${isLog?5:4}" style="padding:14px;color:var(--dim)">No rows found</td></tr>`}</tbody>
+        <thead><tr><th>ID</th>${hasName?'<th>Name</th>':''}<th>Urgency</th><th>Arrival</th>${isLog?'<th>Actual wait (min)</th>':''}<th>Status</th></tr></thead>
+        <tbody>${rowsHtml||`<tr><td colspan="${4+(isLog?1:0)+(hasName?1:0)}" style="padding:14px;color:var(--dim)">No rows found</td></tr>`}</tbody>
       </table>
     </div>`;
   document.getElementById('csvModalStart').disabled=okCount===0;
