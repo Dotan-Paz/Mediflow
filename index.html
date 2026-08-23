@@ -488,6 +488,9 @@ function startSim(){
     document.getElementById('progFill').style.width=(pct*100)+'%';
     if(S.replayMode) releaseReplayArrivals(cm);
     updateStats();
+    // replay only: the future is fully known, so once every patient (incl.
+    // pending arrivals and manual adds) is done there is nothing left to simulate
+    if(S.replayMode&&S.patients.length&&S.patients.every(p=>p.done)){ finishSim(); return; }
     if(pct>=1) finishSim();
   },250);
   if(!S.replayMode) S.arriveRef=setInterval(autoArrive,ARRIVE_MS);
@@ -548,11 +551,12 @@ function stopSim(){
 }
 
 function finishSim(){
+  const endedAt=clinicClock();
   S.running=false; S.paused=false;
   clearInterval(S.tickRef); clearInterval(S.arriveRef);
   applyBtns();
   document.getElementById('btnDl').classList.add('active');
-  setLog(`Clinic day complete — ${S.stats.done}/${S.stats.total} completed. Download insights below.`);
+  setLog(`Clinic day complete at ${endedAt||'16:00'} — ${S.stats.done}/${S.stats.total} completed. Download insights below.`);
   render();
   if(S.replayMode) showReplayReport();
 }
